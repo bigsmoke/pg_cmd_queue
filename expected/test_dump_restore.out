@@ -1,0 +1,23 @@
+-- createdb
+-- psql -X -f 'sql/test_dump_restore.sql' -v 'extension_name=pg_cmd_queue' -v 'test_stage=pre-dump'
+SELECT 1
+psql:sql/test_dump_restore.sql:94: NOTICE:  installing required extension "hstore"
+psql:sql/test_dump_restore.sql:94: NOTICE:  CALL cmdq.test_dump_restore__pg_cmd_queue('pre-dump')
+DO
+-- pg_dumpall --roles-only
+-- pg_dump --format=custom --file <dump_file>
+-- kill -9 <pg_pid>
+-- rm -r $PGDATA
+-- psql postgres -X -c '\set ON_ERROR_STOP' -f <roles_dump_file>
+SET
+SET
+SET
+ALTER ROLE
+-- createdb 'test_dump_restore_oid_noise'
+-- psql -X -f 'sql/test_dump_restore.sql' -v 'extension_name=pg_cmd_queue' -v 'test_stage=pre-restore'
+DO
+-- pg_restore --create --dbname postgres <dump_file>
+-- psql -X -f 'sql/test_dump_restore.sql' -v 'extension_name=pg_cmd_queue' -v 'test_stage=post-restore'
+SELECT 1
+psql:sql/test_dump_restore.sql:94: NOTICE:  CALL cmdq.test_dump_restore__pg_cmd_queue('post-restore')
+DO

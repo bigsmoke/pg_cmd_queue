@@ -1,0 +1,56 @@
+{
+    "name": "pg_cmd_queue",
+    "tags": [
+        "queue",
+        "plpgsql",
+        "view",
+        "table"
+    ],
+    "license": "postgresql",
+    "prereqs": {
+        "test": {
+            "requires": {
+                "pgtap": 0
+            }
+        },
+        "runtime": {
+            "requires": {
+                "hstore": 0
+            }
+        },
+        "development": {
+            "recommends": {
+                "pg_readme": 0
+            }
+        }
+    },
+    "version": "0.1.0",
+    "abstract": "Postgres-native Unix/SQL command queue framework",
+    "provides": {
+        "pg_cmd_queue": {
+            "file": "pg_cmd_queue--0.1.0.sql",
+            "docfile": "README.md",
+            "version": "0.1.0"
+        }
+    },
+    "meta-spec": {
+        "url": "https://pgxn.org/spec/",
+        "version": "1.0.0"
+    },
+    "resources": {
+        "homepage": "https://blog.bigsmoke.us/tag/pg_cmd_queue",
+        "bugtracker": {
+            "web": "https://github.com/bigsmoke/pg_cmd_queue/issues"
+        },
+        "repository": {
+            "url": "https://github.com/bigsmoke/pg_cmd_queue.git",
+            "web": "https://github.com/bigsmoke/pg_cmd_queue",
+            "type": "git"
+        }
+    },
+    "maintainer": [
+        "Rowan Rodrik van der Molen <rowan@bigsmoke.us>"
+    ],
+    "description": "The pg_cmd_queue PostgreSQL extension provides a framework for handling queues of Unix or SQL commands, with a ready-to-go runner daemon.",
+    "generated_by": "`select pg_cmd_queue_meta_pgxn()`"
+}

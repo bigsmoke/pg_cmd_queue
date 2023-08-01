@@ -56,6 +56,14 @@ which does not immediately need to support a high throughput, a view will
 often be the simplest.  See the [`test__pg_cmd_queue()`
 procedure](#procedure-test__pg_cmd_queue) for a full example.
 
+## Running `pg_cmdqd` / `pg_command_queue_daemon`
+
+*nix commands executed by `pg_cmdqd`, are passed the following environment
+variables:
+
+  * the `PATH` with which `pg_cmdqd` was executed.
+
+
 ## Planned features for `pg_cmd_queue`
 
 * Helpers for setting up partitioning for table-based queues, to easily get rid

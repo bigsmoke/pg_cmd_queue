@@ -1,7 +1,7 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-07-26 17:17:09.282298+01
+pg_readme_generated_at: 2023-08-01 15:09:57.425409+01
 pg_readme_version: 0.6.4
 ---
 
@@ -53,111 +53,15 @@ be granted:
 Second, you need to create a relation to represent your queue.  This requires
 you to choose between ⓐ a table to hold your queue, or ⓑ a view.  For a queue
 which does not immediately need to support a high throughput, a view will
-often be the simplest.  Imagine, for example the scenario of a `website_user`
-registration, for which a couple of mails need to be sent:
+often be the simplest.  See the [`test__pg_cmd_queue()`
+procedure](#procedure-test__pg_cmd_queue) for a full example.
 
-```sql
-create schema wobbie;
+## Running `pg_cmdqd` / `pg_command_queue_daemon`
 
-create table wobbie.website_user (
-    website_user_id uuid
-        primary key
-        default uuid_generate_v7()
-    ,created_at timestamptz
-        not null
-        default now()
-    ,email text
-        not null
-        unique
-    ,email_verification_token uuid
-        default gen_random_uuid()
-    ,email_verified_at timestamptz
-    ,password text
-        not null
-    ,password_reset_requested_at timestamptz
-        not null
-    ,password_reset_token uuid
-        unique
-);
+*nix commands executed by `pg_cmdqd`, are passed the following environment
+variables:
 
-create view cmdq.email_confirmation_mail_nix_queue_cmd
-as
-select
-    'cmdq.email_confirmation_mail_nix_queue_cmd'::regclass
-    ,u.website_user_id::text as cmd_id
-    ,null::text as cmd_subid
-    ,u.created_at as cmd_queued_since
-    ,null as cmd_runtime
-    ,array[
-        'wobbie-mail'
-        ,'--to'
-        ,u.email
-        ,'--subject'
-        ,'Confirm your new account at Wobbie'
-        ,'--template'
-        ,'confirm-email.html'
-    ] as cmd_argv
-    ,hstore(
-        'WOBBIE_SMTP_HOST', '127.0.0.1'
-    ) as cmd_env
-    ,to_json(u.*)::text::bytea as cmd_stdin
-    ,null as cmd_exit_code
-    ,null as cmd_stdout
-    ,null as cmd_stderr
-from
-    wobbie.website_user as u
-where
-    u.email_verified_at is null
-;
-
-create function cmdq.email_confirmation_mail_nix_queue_cmd__instead_of_update()
-    returns trigger()
-    language plpgsql
-    as $$
-begin
-    assert tg_when = 'BEFORE';
-    assert tg_op = 'UPDATE';
-    assert tg_level = 'ROW';
-    assert tg_table_schema = 'cmdq';
-    assert tg_table_name = 'email_confirmation_mail_nix_queue_cmd';
-
-    if NEW.cmd_exit_code > 0 then
-        raise exception format(
-            E'%s returned a non-zero exit code (%s); stdout: %s\n\nstderr: %s'
-            ,array_to_string(OLD.cmd_argv, ' ')
-            ,NEW.cmd_exit_code
-            ,NEW.cmd_stdout
-            ,NEW.cmd_stderr
-        );
-    end if;
-
-    update
-        wobbie.website_user
-    set
-        email_verified_at = now()
-    where
-        website_user_id = cmd_id::uuid
-    ;
-
-    return NEW;
-end;
-$$;
-
-create trigger instead_of_update
-    instead of update
-    on cmdq.email_confirmation_mail_nix_queue_cmd
-    for each row
-    execute function cmdq.email_confirmation_mail_nix_queue_cmd__instead_of_update();
-
-insert into cmdq.cmd_queue (
-    queue_cmd_class
-    ,queue_signature_class
-)
-values (
-    'cmdq.email_confirmation_mail_nix_queue_cmd'
-    ,'nix_queue_cmd_template'
-);
-```
+  * the `PATH` with which `pg_cmdqd` was executed.
 
 ## Planned features for `pg_cmd_queue`
 
@@ -249,7 +153,6 @@ The `queue_cmd_template` table has 5 attributes:
    addition to `cmd_id`.
 
    - `NOT NULL`
-   - `DEFAULT uuid_generate_v7()`
 
 3. `queue_cmd_template.cmd_subid` `text`
 
@@ -282,7 +185,6 @@ The `nix_queue_cmd_template` table has 11 attributes:
    addition to `cmd_id`.
 
    - `NOT NULL`
-   - `DEFAULT uuid_generate_v7()`
 
 3. `nix_queue_cmd_template.cmd_subid` `text`
 
@@ -332,7 +234,6 @@ The `sql_queue_cmd_template` table has 6 attributes:
    addition to `cmd_id`.
 
    - `NOT NULL`
-   - `DEFAULT uuid_generate_v7()`
 
 3. `sql_queue_cmd_template.cmd_subid` `text`
 
@@ -384,6 +285,14 @@ The `http_queue_cmd_template` table has 12 attributes:
 12. `http_queue_cmd_template.cmd_http_response_body` `bytea`
 
 ### Routines
+
+#### Function: `cmd_queue__queue_signature_constraint()`
+
+Function return type: `trigger`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
 
 #### Function: `pg_cmd_queue_meta_pgxn()`
 
@@ -462,17 +371,169 @@ Function-local settings:
 
   *  `SET search_path TO pg_catalog`
 
+#### Procedure: `test_dump_restore__pg_cmd_queue (text)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `test_stage$`                                                     | `text`                                                               |  |
+
+Procedure-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET plpgsql.check_asserts TO true`
+
+```sql
+CREATE OR REPLACE PROCEDURE cmdq.test_dump_restore__pg_cmd_queue(IN "test_stage$" text)
+ LANGUAGE plpgsql
+ SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET "plpgsql.check_asserts" TO 'true'
+AS $procedure$
+begin
+    assert test_stage$ in ('pre-dump', 'post-restore');
+
+    if test_stage$ = 'pre-dump' then
+        -- Googling for “wobbie” suggests that namespace collisions will be unlikely.
+        create schema wobbie;  -- “Wobbie is like Facebook, but for Wobles!”
+        perform set_config('search_path', 'wobbie,' || current_setting('search_path'), true);
+        assert current_schema = 'wobbie';
+
+        -- We want to have a mockable `now()` (without introducing a dependency on `pg_mockable`).
+        create or replace function fake_now()
+            returns timestamptz
+            immutable
+            return '2023-07-24 07:00'::timestamptz;
+
+        create table wobbie_user (
+            user_id uuid
+                not null
+                default gen_random_uuid()
+                -- In most real-world scenarios, you will want to use UUIDv7
+                -- instead; see:
+                -- https://blog.bigsmoke.us/2023/06/04/postgresql-sequential-uuids
+            ,created_at timestamptz
+                not null
+                default fake_now()
+            ,email text
+                not null
+                unique
+            ,email_verification_token uuid
+                default gen_random_uuid()
+            ,email_verification_mail_sent_at timestamptz
+            ,email_verified_at timestamptz
+            ,password text  -- Wobbie trusts their users to trust them with plain text passwords!
+                not null
+            ,password_reset_requested_at timestamptz
+            ,password_reset_mail_sent_at timestamptz
+            ,password_reset_token uuid
+                unique
+        );
+
+        create view cmdq.wobbie_user_confirmation_mail_cmd
+        as
+        select
+            -- Outside of a PL/pgSQL context, you can just do `'ns.relation'::regclass`.
+            to_regclass('cmdq.wobbie_user_confirmation_mail_cmd')
+            ,u.user_id::text as cmd_id
+            ,null::text as cmd_subid
+            ,u.created_at as cmd_queued_since
+            ,null::tstzrange as cmd_runtime
+            ,array[
+                'wobbie-mail'
+                ,'--to'
+                ,u.email
+                ,'--subject'
+                ,'Confirm your new account at Wobbie'
+                ,'--template'
+                ,'confirm-email.html'
+            ] as cmd_argv
+            ,hstore(
+                'WOBBIE_SMTP_HOST', '127.0.0.1'
+            ) as cmd_env
+            ,to_json(u.*)::text::bytea as cmd_stdin
+            ,null::smallint as cmd_exit_code
+            ,null::bytea as cmd_stdout
+            ,null::bytea as cmd_stderr
+        from
+            wobbie_user as u
+        where
+            u.email_verified_at is null
+            and u.email_verification_mail_sent_at is null
+        ;
+
+        create function cmdq.wobbie_user_confirmation_mail_cmd__instead_of_update()
+            returns trigger
+            language plpgsql
+            as $plpgsql$
+        begin
+            assert tg_when = 'INSTEAD OF';
+            assert tg_op = 'UPDATE';
+            assert tg_level = 'ROW';
+            assert tg_table_schema = 'cmdq';
+            assert tg_table_name = 'wobbie_user_confirmation_mail_cmd';
+
+            if NEW.cmd_exit_code > 0 then
+                raise exception using message = format(
+                    E'%s returned a non-zero exit code (%s); stdout: %s\n\nstderr: %s'
+                    ,array_to_string(OLD.cmd_argv, ' ')
+                    ,NEW.cmd_exit_code
+                    ,NEW.cmd_stdout
+                    ,NEW.cmd_stderr
+                );
+            end if;
+
+            update
+                wobbie_user
+            set
+                email_verification_mail_sent_at = fake_now()
+            where
+                user_id = OLD.cmd_id::uuid
+            ;
+
+            return NEW;
+        end;
+        $plpgsql$;
+
+        create trigger instead_of_update
+            instead of update
+            on cmdq.wobbie_user_confirmation_mail_cmd
+            for each row
+            execute function cmdq.wobbie_user_confirmation_mail_cmd__instead_of_update();
+
+        insert into cmd_queue (
+            queue_cmd_class
+            ,queue_signature_class
+            ,queue_reselect_interval
+            ,queue_wait_time_limit_warn
+            ,queue_wait_time_limit_crit
+        )
+        values (
+            'cmdq.wobbie_user_confirmation_mail_cmd'
+            ,'nix_queue_cmd_template'
+            ,'1 minute'::interval
+            ,'2 minutes'::interval
+            ,'5 minutes'::interval
+        );
+
+    elsif test_stage$ = 'post-restore' then
+        assert (select count(*) from cmdq.cmd_queue) = 1;
+    end if;
+end;
+$procedure$
+```
+
 #### Procedure: `test__pg_cmd_queue()`
 
 Procedure-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp,public`
+  *  `SET search_path TO cmdq, public, pg_temp`
   *  `SET plpgsql.check_asserts TO true`
 
 ```sql
 CREATE OR REPLACE PROCEDURE cmdq.test__pg_cmd_queue()
  LANGUAGE plpgsql
- SET search_path TO 'cmdq', 'public', 'pg_temp', 'public'
+ SET search_path TO 'cmdq', 'public', 'pg_temp'
  SET "plpgsql.check_asserts" TO 'true'
 AS $procedure$
 declare
@@ -539,13 +600,39 @@ begin
         ,to_json(u.*)::text::bytea as cmd_stdin
         ,null::smallint as cmd_exit_code
         ,null::bytea as cmd_stdout
-        ,null::bytea as cmd_stderr
+        ,null::bytea as cmd_stderrr  -- One r too many.
     from
         wobbie_user as u
     where
         u.email_verified_at is null
         and u.email_verification_mail_sent_at is null
     ;
+
+    <<incompatible_view_signature>>
+    begin
+        insert into cmd_queue (
+            queue_cmd_class
+            ,queue_signature_class
+            ,queue_reselect_interval
+            ,queue_wait_time_limit_warn
+            ,queue_wait_time_limit_crit
+        )
+        values (
+            'cmdq.wobbie_user_confirmation_mail_cmd'
+            ,'nix_queue_cmd_template'
+            ,'1 minute'::interval
+            ,'2 minutes'::interval
+            ,'5 minutes'::interval
+        );
+
+        raise assert_failure using
+            message = 'Should not be able to register view with incompatible signature.';
+    exception
+        when integrity_constraint_violation then
+    end incompatible_view_signature;
+
+    alter view cmdq.wobbie_user_confirmation_mail_cmd
+        rename column cmd_stderrr to cmd_stderr;
 
     create function cmdq.wobbie_user_confirmation_mail_cmd__instead_of_update()
         returns trigger

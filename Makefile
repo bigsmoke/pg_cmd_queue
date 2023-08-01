@@ -32,3 +32,9 @@ test_dump_restore: $(CURDIR)/bin/test_dump_restore.sh sql/test_dump_restore.sql
 		--psql-script-file sql/test_dump_restore.sql \
 		--out-file results/test_dump_restore.out \
 		--expected-out-file expected/test_dump_restore.out
+
+pg_cmd_queue_runner: pg_cmd_queue_runner.c
+	$(CC) -I$(shell PGCONFIG --includedir) -o $@ $<
+
+pg_cmd_queue_runner.c: pg_cmd_queue_runner.pgc
+	ecpg $<

@@ -1,0 +1,108 @@
+#include <libpq-fe.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include <libgen.h>
+
+#define CMDQ_PG_SCHEMA "cmdq"
+
+/**
+ * `UPDATE` a particular command in the queue.
+ */
+void cmdq_update_nix_queue_cmd() {
+}
+
+void cmdq_run_queues() {
+	EXEC SQL BEGIN DECLARE SECTION;
+	VARCHAR queue_cmd_class;
+	VARCHAR queue_signature_class;
+	int queue_runner_euid;
+	int queue_runner_egid;
+	VARCHAR queue_runner_role;
+	VARCHAR queue_notify_channel;
+	int queue_reselect_interval_usec;
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL DECLARE select_queue CURSOR FOR
+		SELECT
+			queue_cmd_class::regclass::text
+			,queue_signature_class::regclass::text
+			,queue_runner_euid
+			,queue_runner_egid
+			,queue_runner_role::text
+			,queue_notify_channel
+			,extract('epoch' from queue_reselect_interval) * 10^6 as queue_reselect_interval_usec
+		FROM
+			cmdq.cmd_queue
+		;
+	EXEC SQL OPEN select_queue;
+	while (true) {
+		EXEC SQL FETCH NEXT FROM select_queue INTO
+			:queue_cmd_class
+			,:queue_signature_class
+			,;queue_runner_euid
+			,:queue_runner_egid
+			,:queue_runner_role
+			,:queue_notify_channel
+			,:queue_reselect_interval_usec
+			;
+		cmdq_run_queue(queue);
+
+		if (strcmp(queue_signature_class, "nix_queue_cmd_template") = 0) {
+			pthread_create(&threads[i], NULL, cmdq_run_nix_cmd_queue, &thread_args[i]);
+		}
+	}
+
+	EXEC SQL CLOSE select_queue;
+}
+
+void cmdq_update_sql_queue_cmd() {
+}
+
+void cmdq_run_nix_cmd_queue(void *pthread_args) {
+	EXEC SQL BEGIN DECLARE SECTION;
+	VARCHAR
+	EXEC SQL END DECLARE SECTION;
+}
+
+void cmdq_run_sql_cmd_queue(void *pthread_args) {
+	EXEC SQL BEGIN DECLARE SECTION;
+	VARCHAR
+	EXEC SQL END DECLARE SECTION;
+}
+
+int main(int argc, char **argv) {
+	EXEC SQL SET search_path TO 'cmdq';
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--help") = 0 || strcmp(argv[i], "-h") = 0) {
+			cmdq_print_usage(argv[0]);
+		}
+		else {
+			printf("");
+		}
+	}
+
+
+	return 0;
+}
+
+void cmdq_print_usage(char* program_name) {
+	printf(
+		"Usage:\n"
+		"    %1$s [ options ] <connection_string\n"
+		"    %1$s --help|-h\n"
+		"\n"
+		"<connection_string> can be in keyword/value or in URI format, as per the libpq documentation:\n"
+		"    https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING\n"
+		"\n"
+		"Thanks to libpq, most connection parameter values can also be set via environment variables:\n"
+		"    https://www.postgresql.org/docs/current/libpq-envars.html\n"
+		"\n"
+		"Options:\n"
+		"    --config-dir|-d\n"
+		"\n",
+		basename(program_name)
+	);
+}
+
+/* vim: set ft=c noexpandtab tabstop=4 softtabstop=4 shiftwidth=4: */

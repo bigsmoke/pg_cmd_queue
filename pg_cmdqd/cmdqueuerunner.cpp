@@ -1,13 +1,21 @@
-#include "queuethread.h"
+#include "cmdqueuerunner.h"
 
-#include <sys/epoll.h>
-
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 
+#include <sys/epoll.h>
+
 #include "utils.h"
 
-void QueueThread::run()
+CmdQueueRunner::CmdQueueRunner(const CmdQueue &cmd_queue) :
+    _cmd_queue(cmd_queue)
+{
+    auto f = std::bind(&CmdQueueRunner::run, this);
+    thread = std::thread(f);
+}
+
+void CmdQueueRunner::run()
 {
     int epoll_fd = check<std::runtime_error>(epoll_create(69));
     struct epoll_event events[MAX_EVENTS];
@@ -25,7 +33,7 @@ void QueueThread::run()
     }
 }
 
-void QueueThread::stop_running()
+void CmdQueueRunner::stop_running()
 {
     this->_keep_running = false;
 }

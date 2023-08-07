@@ -1,23 +1,20 @@
-// libstd
 #include <functional>
 #include <stdexcept>
 #include <string>
 #include <iostream>
 #include <thread>
 
-// POSIX
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 
-// Postgres libpq
 #include <postgresql/libpq-fe.h>
 
 #include "lwpg_context.h"
 #include "lwpg_results.h"
 #include "cmdqueue.h"
-#include "queuethread.h"
+#include "cmdqueuerunner.h"
 #include "utils.h"
 
 void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout) {
@@ -58,28 +55,27 @@ int main(int argc, char **argv) {
 
     std::cout << "DB connection established." << std::endl;
 
-    lwpg::Results<CmdQueue> cmdQueueResults = pg.query<CmdQueue>(CmdQueue::SELECT);
-    std::unordered_map<std::string, CmdQueue> cmdQueues;
-    std::unordered_map<std::string, std::thread> threads;
+    lwpg::Results<CmdQueue> cmd_queue_results = pg.query<CmdQueue>(CmdQueue::SELECT);
+    std::unordered_map<std::string, CmdQueueRunner> cmd_queue_runners;
 
-    for (CmdQueue cmdQueue : cmdQueueResults)
+    for (CmdQueue cmd_queue : cmd_queue_results)
     {
-        if (!cmdQueue.is_valid())
+        if (!cmd_queue.is_valid())
         {
             continue;
         }
 
-        std::cout << cmdQueue.queue_cmd_class << std::endl;
+        std::cout << cmd_queue.queue_cmd_class << std::endl;
 
-        cmdQueues[cmdQueue.queue_cmd_class] = std::move(cmdQueue);
+        cmd_queue_runners.emplace(std::piecewise_construct, std::forward_as_tuple(cmd_queue.queue_cmd_class), std::forward_as_tuple(cmd_queue));
     }
 
-    QueueThread qt;
-    auto f = std::bind(&QueueThread::run, &qt);
-    std::thread t(f);
-
-    if (t.joinable()) {
-        t.join();
+    for (auto &it : cmd_queue_runners)
+    {
+        if (it.second.thread.joinable())
+        {
+            it.second.thread.join();
+        }
     }
 
     return 0;

@@ -13,7 +13,7 @@ add_executable(pg_cmd_queue_daemon
     pg_cmd_queue_daemon.cpp
     utils.h utils.cpp
     cmdqueue.h cmdqueue.cpp
-    queuethread.h queuethread.cpp
+    cmdqueuerunner.h cmdqueuerunner.cpp
     nixqueuecmd.h nixqueuecmd.cpp
     lwpg_array.h lwpg_array.cpp
     lwpg_conn.h lwpg_conn.cpp

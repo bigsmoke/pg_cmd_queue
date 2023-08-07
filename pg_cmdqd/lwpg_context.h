@@ -22,8 +22,6 @@ namespace lwpg
     public:
         void connectdb(const std::string &conninfo);
 
-        void doSomething();
-
         template<typename T>
         lwpg::Results<T> query(const std::string &query)
         {

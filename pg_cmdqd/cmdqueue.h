@@ -5,11 +5,11 @@
 #include <string>
 #include <unordered_map>
 
-class LWPGresult;
+#include "lwpg_result.h"
 
-// XXX: Why not `class`?
-struct CmdQueue
+class CmdQueue
 {
+public:
     static const std::string SELECT;
 
     std::string queue_cmd_class;
@@ -21,9 +21,8 @@ struct CmdQueue
     int queue_reselect_interval_usec;
     bool _is_valid = false;
 
-public:
     CmdQueue() = default;
-    CmdQueue(std::shared_ptr<LWPGresult> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     bool is_valid() const;
 };
 

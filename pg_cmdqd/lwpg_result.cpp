@@ -1,13 +1,13 @@
 #include "lwpg_result.h"
 
 
-LWPGresult::LWPGresult(PGresult *res) :
+lwpg::Result::Result(PGresult *res) :
     result(res)
 {
 
 }
 
-LWPGresult::~LWPGresult()
+lwpg::Result::~Result()
 {
     if (!this->result)
         return;
@@ -15,12 +15,12 @@ LWPGresult::~LWPGresult()
     PQclear(this->result);
 }
 
-ExecStatusType LWPGresult::getResultStatus() const
+ExecStatusType lwpg::Result::getResultStatus() const
 {
     return PQresultStatus(result);
 }
 
-PGresult *LWPGresult::get()
+PGresult *lwpg::Result::get()
 {
     return this->result;
 }

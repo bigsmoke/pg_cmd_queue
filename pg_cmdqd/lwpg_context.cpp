@@ -1,9 +1,9 @@
 #include "lwpg_context.h"
 #include "lwpg_result_iterator.h"
 
-void LWPGcontext::connectdb(const std::string &conninfo)
+void lwpg::Context::connectdb(const std::string &conninfo)
 {
-    conn = std::make_shared<LWPGconn>(PQconnectdb(conninfo.c_str()));
+    conn = std::make_shared<lwpg::Conn>(PQconnectdb(conninfo.c_str()));
 
     if (PQstatus(conn->get()) != CONNECTION_OK)
     {
@@ -12,7 +12,7 @@ void LWPGcontext::connectdb(const std::string &conninfo)
     }
 
     // Secure search path. The docs suggest this. TODO: talk to Rowan.
-    LWPGresult res(PQexec(conn->get(), "SELECT pg_catalog.set_config('search_path', '', false)"));
+    lwpg::Result res(PQexec(conn->get(), "SELECT pg_catalog.set_config('search_path', '', false)"));
 
     if (res.getResultStatus() != PGRES_TUPLES_OK)
     {
@@ -21,12 +21,12 @@ void LWPGcontext::connectdb(const std::string &conninfo)
     }
 }
 
-void LWPGcontext::exec(const std::string query)
+void lwpg::Context::exec(const std::string query)
 {
     if (!this->conn)
         throw std::runtime_error("No connection");
 
-    std::shared_ptr<LWPGresult> result = std::make_shared<LWPGresult>(PQexec(conn->get(), query.c_str()));
+    std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
 
     if (result->getResultStatus() != PGRES_COMMAND_OK)
     {

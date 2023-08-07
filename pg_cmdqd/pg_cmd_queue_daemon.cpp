@@ -53,12 +53,12 @@ int main(int argc, char **argv) {
 
     std::cout << "Connecting to database: " << conn_str << std::endl;
 
-    LWPGcontext pg;
+    lwpg::Context pg;
     pg.connectdb(conn_str);
 
     std::cout << "DB connection established." << std::endl;
 
-    LWPGresults<CmdQueue> cmdQueueResults = pg.query<CmdQueue>(CmdQueue::SELECT);
+    lwpg::Results<CmdQueue> cmdQueueResults = pg.query<CmdQueue>(CmdQueue::SELECT);
     std::unordered_map<std::string, CmdQueue> cmdQueues;
     std::unordered_map<std::string, std::thread> threads;
 

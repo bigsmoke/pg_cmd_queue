@@ -4,6 +4,12 @@
 #include <string>
 #include <vector>
 
-std::vector<std::string> LWPGarray_to_vector(const std::string &input);
+namespace lwpg
+{
+    /**
+     * Convert a PostgreSQL array string to a vector of strings representing the array member values.
+     */
+    std::vector<std::string> array_to_vector(const std::string &input);
+}
 
 #endif // LWPG_ARRAY_H

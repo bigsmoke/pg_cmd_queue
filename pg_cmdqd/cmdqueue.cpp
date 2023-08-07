@@ -29,7 +29,7 @@ const std::string CmdQueue::SELECT = R"SQL(
  * @param row
  * @param fieldMapping
  */
-CmdQueue::CmdQueue(std::shared_ptr<LWPGresult> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
+CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
 {
     try
     {

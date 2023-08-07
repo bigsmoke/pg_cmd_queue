@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-class LWPGresult;
+#include "lwpg_result.h"
 
 struct NixQueueCmd
 {
@@ -29,7 +29,7 @@ struct NixQueueCmd
 
 public:
     NixQueueCmd() = default;
-    NixQueueCmd(std::shared_ptr<LWPGresult> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     bool is_valid() const;
     static std::string select(std::string& local_relname);
 };

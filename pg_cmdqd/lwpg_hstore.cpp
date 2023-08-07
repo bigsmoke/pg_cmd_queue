@@ -1,6 +1,6 @@
 #include "lwpg_hstore.h"
 
-std::unordered_map<std::string, std::string> LWPGhstore_to_unordered_map(std::string input)
+std::unordered_map<std::string, std::string> lwpg::hstore_to_unordered_map(std::string input)
 {
     std::unordered_map<std::string, std::string> result;
 

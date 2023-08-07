@@ -3,7 +3,7 @@
 #include <cassert>
 #include <vector>
 
-std::vector<std::string> LWPGarray_to_vector(const std::string &input)
+std::vector<std::string> lwpg::array_to_vector(const std::string &input)
 {
     std::vector<std::string> result;
     int depth = 0;

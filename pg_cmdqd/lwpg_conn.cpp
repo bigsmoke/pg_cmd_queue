@@ -7,13 +7,13 @@
 
 #include "lwpg_result.h"
 
-LWPGconn::LWPGconn(PGconn *conn) :
+lwpg::Conn::Conn(PGconn *conn) :
     conn(conn)
 {
 
 }
 
-LWPGconn::~LWPGconn()
+lwpg::Conn::~Conn()
 {
     if (!conn)
         return;
@@ -21,7 +21,7 @@ LWPGconn::~LWPGconn()
     PQfinish(conn);
 }
 
-PGconn *LWPGconn::get()
+PGconn *lwpg::Conn::get()
 {
     return this->conn;
 }

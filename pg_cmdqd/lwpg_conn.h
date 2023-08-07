@@ -7,21 +7,24 @@
 
 #include "postgresql/libpq-fe.h"
 
-/**
- * @brief Just a light-weight RAII wrapper for PGconn.
- */
-class LWPGconn
+namespace lwpg
 {
-    PGconn *conn = nullptr;
 
-public:
-    LWPGconn(const LWPGconn &other) = delete;
-    LWPGconn(PGconn *conn);
-    ~LWPGconn();
+    /**
+     * @brief Just a light-weight RAII wrapper for PGconn.
+     */
+    class Conn
+    {
+        PGconn *conn = nullptr;
 
-    PGconn *get();
-};
+    public:
+        Conn(const Conn &other) = delete;
+        Conn(PGconn *conn);
+        ~Conn();
 
+        PGconn *get();
+    };
 
+}
 
 #endif // LWPG_CONN_H

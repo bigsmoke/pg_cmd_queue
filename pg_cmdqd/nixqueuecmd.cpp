@@ -20,7 +20,7 @@ const std::string NixQueueCmd::SELECT_STMT_WITHOUT_RELNAME = R"SQL(
         cmdq.%s
 )SQL";
 
-NixQueueCmd::NixQueueCmd(std::shared_ptr<LWPGresult> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
+NixQueueCmd::NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
 {
     try
     {
@@ -28,10 +28,10 @@ NixQueueCmd::NixQueueCmd(std::shared_ptr<LWPGresult> &result, int row, const std
         cmd_id = PQgetvalue(result->get(), row, fieldMapping.at("cmd_id"));
         cmd_subid = PQgetvalue(result->get(), row, fieldMapping.at("cmd_subid"));
         std::string raw_cmd_argv = PQgetvalue(result->get(), row, fieldMapping.at("cmd_argv"));
-        cmd_argv = LWPGarray_to_vector(raw_cmd_argv);
+        cmd_argv = lwpg::array_to_vector(raw_cmd_argv);
         // TODO
         //std::string raw_cmd_env = PQgetvalue(result->get(), row, fieldMapping.at("cmd_env"));
-        //cmd_env = LWPGarray_to_vector(raw_cmd_env);
+        //cmd_env = lwpgarray_to_vector(raw_cmd_env);
         cmd_stdin = PQgetvalue(result->get(), row, fieldMapping.at("cmd_stdin"));
 
         _is_valid = true;

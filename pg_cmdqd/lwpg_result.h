@@ -7,23 +7,25 @@
 
 #include "lwpg_conn.h"
 
-
-/**
- * @brief The LWPGresult struct is basically just a RAII wrapper for PGresult.
- */
-class LWPGresult
+namespace lwpg
 {
-    PGresult *result = nullptr;
 
-public:
-    LWPGresult(const LWPGresult &other) = delete;
-    LWPGresult(PGresult *res);
-    ~LWPGresult();
+    /**
+     * @brief The `result` struct is basically just a RAII wrapper for `PGresult`.
+     */
+    class Result
+    {
+        PGresult *result = nullptr;
 
-    ExecStatusType getResultStatus() const;
-    PGresult *get();
-};
+    public:
+        Result(const Result &other) = delete;
+        Result(PGresult *res);
+        ~Result();
 
+        ExecStatusType getResultStatus() const;
+        PGresult *get();
+    };
 
+}
 
 #endif // LWPG_RESULT_H

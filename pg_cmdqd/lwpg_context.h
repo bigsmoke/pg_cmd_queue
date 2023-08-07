@@ -9,42 +9,45 @@
 #include "lwpg_result.h"
 #include "lwpg_results.h"
 
-/**
- * @brief LWPGcontext is where you run queries and such. Its connection is a shared pointer because it may need to be passed around, to iterators and such.
- */
-class LWPGcontext
+namespace lwpg
 {
-    std::shared_ptr<LWPGconn> conn;
 
-public:
-    void connectdb(const std::string &conninfo);
-
-    void doSomething();
-
-    template<typename T>
-    LWPGresults<T> query(const std::string &query)
+    /**
+     * @brief Context is where you run queries and such. Its connection is a shared pointer because it may need to be passed around, to iterators and such.
+     */
+    class Context
     {
-        if (!this->conn)
-            throw std::runtime_error("No connection");
+        std::shared_ptr<Conn> conn;
 
-        std::shared_ptr<LWPGresult> result = std::make_shared<LWPGresult>(PQexec(conn->get(), query.c_str()));
+    public:
+        void connectdb(const std::string &conninfo);
 
-        if (result->getResultStatus() != PGRES_TUPLES_OK)
+        void doSomething();
+
+        template<typename T>
+        lwpg::Results<T> query(const std::string &query)
         {
-            std::string error(PQerrorMessage(conn->get()));
-            throw std::runtime_error(error);
+            if (!this->conn)
+                throw std::runtime_error("No connection");
+
+            std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
+
+            if (result->getResultStatus() != PGRES_TUPLES_OK)
+            {
+                std::string error(PQerrorMessage(conn->get()));
+                throw std::runtime_error(error);
+            }
+
+            int rowCount = PQntuples(result->get());
+            int fieldCount = PQnfields(result->get());
+            lwpg::ResultIterator<T> begin(result, conn, rowCount, fieldCount);
+
+            lwpg::Results<T> results(begin, rowCount);
+            return results;
         }
 
-        int rowCount = PQntuples(result->get());
-        int fieldCount = PQnfields(result->get());
-        LWPGresult_iterator<T> begin(result, conn, rowCount, fieldCount);
-
-        LWPGresults<T> results(begin, rowCount);
-        return results;
-    }
-
-    template<typename T>
-        LWPGresults<T> query(const std::string &query, const std::vector<std::string> &params)
+        template<typename T>
+        lwpg::Results<T> query(const std::string &query, const std::vector<std::string> &params)
         {
             if (!this->conn)
                 throw std::runtime_error("No connection");
@@ -56,7 +59,7 @@ public:
                 values[i++] = param.c_str();
             }
 
-            std::shared_ptr<LWPGresult> result = std::make_shared<LWPGresult>(PQexecParams(conn->get(),
+            std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexecParams(conn->get(),
                 query.c_str(), params.size(),  nullptr, values, nullptr, nullptr, 0) );
 
             if (result->getResultStatus() != PGRES_TUPLES_OK)
@@ -67,15 +70,15 @@ public:
 
             int rowCount = PQntuples(result->get());
             int fieldCount = PQnfields(result->get());
-            LWPGresult_iterator<T> begin(result, conn, rowCount, fieldCount);
+            lwpg::ResultIterator<T> begin(result, conn, rowCount, fieldCount);
 
-            LWPGresults<T> results(begin, rowCount);
+            lwpg::Results<T> results(begin, rowCount);
             return results;
         }
 
         void exec(const std::string query);
+    };
 
-
-};
+}
 
 #endif // LWPG_CONTEXT_H

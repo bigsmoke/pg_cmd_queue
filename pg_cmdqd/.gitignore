@@ -32,4 +32,5 @@
 *.app
 
 # cmake build stuff
-build-*
+Release
+Debug

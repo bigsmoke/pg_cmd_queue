@@ -21,7 +21,7 @@ void lwpg::Context::connectdb(const std::string &conninfo)
     }
 }
 
-void lwpg::Context::exec(const std::string query)
+void lwpg::Context::exec(const std::string &query)
 {
     if (!this->conn)
         throw std::runtime_error("No connection");
@@ -29,6 +29,35 @@ void lwpg::Context::exec(const std::string query)
     std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
 
     if (result->getResultStatus() != PGRES_COMMAND_OK)
+    {
+        std::string error(PQerrorMessage(conn->get()));
+        throw std::runtime_error(error);
+    }
+}
+
+void lwpg::Context::exec(const std::string &query, const std::vector<std::string> &params)
+{
+    if (!this->conn)
+        throw std::runtime_error("No connection");
+
+    const char *values[params.size()];
+    int i = 0;
+    for (const std::string &param : params)
+    {
+        values[i++] = param.c_str();
+    }
+
+    std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexecParams(conn->get(),
+        query.c_str(), params.size(),  nullptr, values, nullptr, nullptr, 0) );
+
+
+    if (result->getResultStatus() != PGRES_COMMAND_OK)
+    {
+        std::string error(PQerrorMessage(conn->get()));
+        throw std::runtime_error(error);
+    }
+
+    if (result->getResultStatus() != PGRES_TUPLES_OK)
     {
         std::string error(PQerrorMessage(conn->get()));
         throw std::runtime_error(error);

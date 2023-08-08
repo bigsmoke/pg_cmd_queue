@@ -74,7 +74,8 @@ namespace lwpg
             return results;
         }
 
-        void exec(const std::string query);
+        void exec(const std::string &query);
+        void exec(const std::string &query, const std::vector<std::string> &params);
     };
 
 }

@@ -67,7 +67,11 @@ int main(int argc, char **argv) {
 
         std::cout << cmd_queue.queue_cmd_class << std::endl;
 
-        cmd_queue_runners.emplace(std::piecewise_construct, std::forward_as_tuple(cmd_queue.queue_cmd_class), std::forward_as_tuple(cmd_queue));
+        cmd_queue_runners.emplace(
+            std::piecewise_construct,
+            std::forward_as_tuple(cmd_queue.queue_cmd_class),
+            std::forward_as_tuple(cmd_queue, conn_str)
+        );
     }
 
     for (auto &it : cmd_queue_runners)
@@ -81,4 +85,4 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-/* vim: set expandtab tabstop=4 softtabstop=4 shiftwidth=4: */
+// vim: set expandtab tabstop=4 softtabstop=4 shiftwidth=4:

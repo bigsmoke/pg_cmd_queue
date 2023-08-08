@@ -6,15 +6,16 @@
 #include <unordered_map>
 #include <vector>
 
+#include "lwpg_nullable.h"
 #include "lwpg_result.h"
 
-struct NixQueueCmd
+class NixQueueCmd
 {
     static const std::string SELECT_STMT_WITHOUT_RELNAME;
 
     std::string queue_cmd_class;
     std::string cmd_id;
-    std::string cmd_subid;
+    lwpg::nullable_string cmd_subid;
     int cmd_queued_since;
     int cmd_runtime_start;
     int cmd_runtime_end;
@@ -32,6 +33,7 @@ public:
     NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     bool is_valid() const;
     static std::string select(std::string& local_relname);
+    void run_cmd();
 };
 
 #endif // NIXQUEUECMD_H

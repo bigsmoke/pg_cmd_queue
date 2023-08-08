@@ -48,9 +48,9 @@ CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::un
             this->queue_runner_egid = std::stoi(queue_runner_egid);
         }
 
-        queue_runner_role = PQgetvalue(result->get(), row, fieldMapping.at("queue_runner_role"));
+        queue_runner_role = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_runner_role"));
 
-        queue_notify_channel = PQgetvalue(result->get(), row, fieldMapping.at("queue_notify_channel"));
+        queue_notify_channel = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_notify_channel"));
 
         std::string queue_reselect_interval_usec = PQgetvalue(result->get(), row, fieldMapping.at("queue_reselect_interval_usec"));
         this->queue_reselect_interval_usec = std::stoi(queue_reselect_interval_usec);

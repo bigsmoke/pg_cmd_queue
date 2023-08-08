@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "lwpg_nullable.h"
 #include "lwpg_result.h"
 
 class CmdQueue
@@ -16,8 +17,8 @@ public:
     std::string queue_signature_class;
     int queue_runner_euid;
     int queue_runner_egid;
-    std::string queue_runner_role;
-    std::string queue_notify_channel;
+    lwpg::nullable_string queue_runner_role;
+    lwpg::nullable_string queue_notify_channel;
     int queue_reselect_interval_usec;
     bool _is_valid = false;
 

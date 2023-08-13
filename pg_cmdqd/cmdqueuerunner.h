@@ -1,8 +1,6 @@
 #ifndef CMDQUEUERUNNER_H
 #define CMDQUEUERUNNER_H
 
-#define MAX_EVENTS 20
-
 #include <thread>
 
 #include "lwpg_context.h"

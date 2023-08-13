@@ -13,13 +13,14 @@ class CmdQueue
 public:
     static const std::string SELECT;
 
+    std::string queue_cmd_relname;
     std::string queue_cmd_class;
     std::string queue_signature_class;
     int queue_runner_euid;
     int queue_runner_egid;
     lwpg::nullable_string queue_runner_role;
     lwpg::nullable_string queue_notify_channel;
-    int queue_reselect_interval_usec;
+    int queue_reselect_interval_msec;
     bool _is_valid = false;
 
     CmdQueue() = default;

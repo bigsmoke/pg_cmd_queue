@@ -18,7 +18,7 @@ const std::string CmdQueue::SELECT = R"SQL(
         ,queue_runner_egid
         ,queue_runner_role::text
         ,queue_notify_channel
-        ,extract('epoch' from queue_reselect_interval) * 10^6 as queue_reselect_interval_usec
+        ,extract('epoch' from queue_reselect_interval) * 10^3 as queue_reselect_interval_msec
     FROM
         cmdq.cmd_queue
 )SQL";
@@ -52,8 +52,8 @@ CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::un
 
         queue_notify_channel = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_notify_channel"));
 
-        std::string queue_reselect_interval_usec = PQgetvalue(result->get(), row, fieldMapping.at("queue_reselect_interval_usec"));
-        this->queue_reselect_interval_usec = std::stoi(queue_reselect_interval_usec);
+        std::string queue_reselect_interval_msec = PQgetvalue(result->get(), row, fieldMapping.at("queue_reselect_interval_msec"));
+        this->queue_reselect_interval_msec = std::stoi(queue_reselect_interval_msec);
 
         _is_valid = true;
     }

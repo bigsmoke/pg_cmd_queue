@@ -10,15 +10,6 @@ void lwpg::Context::connectdb(const std::string &conninfo)
         std::string error(PQerrorMessage(conn->get()));
         throw std::runtime_error(error);
     }
-
-    // Secure search path. The docs suggest this. TODO: talk to Rowan.
-    lwpg::Result res(PQexec(conn->get(), "SELECT pg_catalog.set_config('search_path', '', false)"));
-
-    if (res.getResultStatus() != PGRES_TUPLES_OK)
-    {
-        std::string error(PQerrorMessage(conn->get()));
-        throw std::runtime_error(error);
-    }
 }
 
 void lwpg::Context::exec(const std::string &query)
@@ -62,4 +53,14 @@ void lwpg::Context::exec(const std::string &query, const std::vector<std::string
         std::string error(PQerrorMessage(conn->get()));
         throw std::runtime_error(error);
     }
+}
+
+std::shared_ptr<lwpg::Conn> lwpg::Context::get_conn()
+{
+    return conn;
+}
+
+int lwpg::Context::socket() const
+{
+    return PQsocket(this->conn->get());
 }

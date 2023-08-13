@@ -11,6 +11,8 @@ add_compile_options(-Wall)
 
 add_executable(pg_cmd_queue_daemon
     optional.hpp
+    argv_guard.h argv_guard.cpp
+    envp_guard.h envp_guard.cpp
     utils.h utils.cpp
     lwpg_array.h lwpg_array.cpp
     lwpg_conn.h lwpg_conn.cpp
@@ -23,6 +25,7 @@ add_executable(pg_cmd_queue_daemon
     cmdqueue.h cmdqueue.cpp
     cmdqueuerunner.h cmdqueuerunner.cpp
     nixqueuecmd.h nixqueuecmd.cpp
+    nixqueuecmdcontext.h nixqueuecmdcontext.cpp
     pg_cmd_queue_daemon.cpp
 )
 

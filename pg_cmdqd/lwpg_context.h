@@ -17,7 +17,7 @@ namespace lwpg
      */
     class Context
     {
-        std::shared_ptr<Conn> conn;
+        std::shared_ptr<Conn> conn;  // TODO: Make public or prefix with underscore
 
     public:
         void connectdb(const std::string &conninfo);
@@ -42,6 +42,38 @@ namespace lwpg
 
             lwpg::Results<T> results(begin, rowCount);
             return results;
+        }
+
+        template<typename T>
+        T query1(const std::string &query)
+        {
+            if (!this->conn)
+                throw std::runtime_error("No connection");
+
+            std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
+
+            if (result->getResultStatus() != PGRES_TUPLES_OK)
+            {
+                std::string error(PQerrorMessage(conn->get()));
+                throw std::runtime_error(error);
+            }
+
+            int row_count = PQntuples(result->get());
+            if (row_count > 0)
+            {
+                throw std::runtime_error("Too many rows");
+            }
+
+            int fieldCount = PQnfields(result->get());
+            std::unordered_map<std::string, std::string> fieldMappings;
+            for (int i = 0; i < fieldCount; i++)
+            {
+                std::string value = PQfname(result->get(), i);
+                fieldMappings[value] = i;
+            }
+
+            T t(result, 0, fieldMappings);
+            return t;
         }
 
         template<typename T>
@@ -76,8 +108,10 @@ namespace lwpg
 
         void exec(const std::string &query);
         void exec(const std::string &query, const std::vector<std::string> &params);
-    };
 
+        std::shared_ptr<Conn> get_conn();  // TODO: Ask Wiebe: Misschien beter gewoon public maken?
+        int socket() const;  // TODO: Ask Wiebe: should this indeed be const?
+    };
 }
 
 #endif // LWPG_CONTEXT_H

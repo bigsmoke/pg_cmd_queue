@@ -550,15 +550,20 @@ create table nix_queue_cmd_template (
     ,cmd_env hstore
         not null
     ,cmd_stdin bytea
-    ,cmd_exit_code smallint
+    ,cmd_exit_code int
+    ,cmd_term_sig int
     ,cmd_stdout bytea
     ,cmd_stderr bytea
+    ,constraint check_exited_normally_or_not check (
+        num_nulls(cmd_exit_code, cmd_term_sig) in (0, 1)
+    )
     ,constraint check_finished_in_full check (
         num_nulls(
             cmd_runtime
             ,lower(cmd_runtime)
             ,upper(cmd_runtime)
             ,cmd_exit_code
+            ,cmd_term_sig
             ,cmd_stdout
             ,cmd_stderr
         ) in (0, 6)
@@ -662,7 +667,8 @@ begin
             'WOBBIE_SMTP_HOST', '127.0.0.1'
         ) as cmd_env
         ,to_json(u.*)::text::bytea as cmd_stdin
-        ,null::smallint as cmd_exit_code
+        ,null::int as cmd_exit_code
+        ,null::int as cmd_term_sig
         ,null::bytea as cmd_stdout
         ,null::bytea as cmd_stderrr  -- One r too many.
     from
@@ -759,7 +765,8 @@ begin
             'WOBBIE_SMTP_HOST', '127.0.0.1'
         ) as cmd_env
         ,to_json(u.*)::text::bytea as cmd_stdin
-        ,null::smallint as cmd_exit_code
+        ,null::int as cmd_exit_code
+        ,null::int as cmd_term_sig
         ,null::bytea as cmd_stdout
         ,null::bytea as cmd_stderr
     from

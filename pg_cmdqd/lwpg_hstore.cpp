@@ -10,7 +10,8 @@ std::unordered_map<std::string, std::string> lwpg::hstore_to_unordered_map(std::
 
     for (std::string::size_type i = 0; i < input.size(); ++i)
     {
-        if (input[i] == '"' and (i == 0 or input[i-1] != '\\')) {
+        if (input[i] == '"' and (i == 0 or input[i-1] != '\\'))
+        {
             in_quotes = not in_quotes;
             if (in_quotes)
             {
@@ -37,7 +38,8 @@ std::unordered_map<std::string, std::string> lwpg::hstore_to_unordered_map(std::
                 }
             }
         }
-        else if ((not in_quotes) && input[i] == '=' && input[i+1] == '>') {
+        else if ((not in_quotes) && input[i] == '=' && input[i+1] == '>')
+        {
             ++i;
         }
     }

@@ -17,9 +17,10 @@
 #include "cmdqueuerunner.h"
 #include "utils.h"
 
-void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout) {
+void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
+{
     stream << "Usage:" << std::endl
-        << "    " << basename(program_name) << " [ options ] <connection_string" << std::endl
+        << "    " << basename(program_name) << " [ options ] <connection_string>" << std::endl
         << "    " << basename(program_name) << " --help | -h" << std::endl
         << std::endl
         << "<connection_string> can be in keyword/value or in URI format, as per the libpq documentation:" << std::endl
@@ -33,16 +34,21 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout) {
         << std::endl;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     std::string conn_str;
-    for (int i = 1; i < argc; i++) {
-        if (std::string(argv[i]) == "--help" || std::string(argv[i]) == "-h") {
+    for (int i = 1; i < argc; i++)
+    {
+        if (std::string(argv[i]) == "--help" || std::string(argv[i]) == "-h")
+        {
             pg_cmdqd_usage(argv[0]);
         }
-        else if (i == argc - 1) {
+        else if (i == argc - 1)
+        {
             conn_str.append(argv[1]);
         }
-        else {
+        else
+        {
             std::cerr << "Unrecognized argument/option: " << argv[i] << std::endl;
             pg_cmdqd_usage(argv[0], std::cerr);
         }
@@ -55,7 +61,7 @@ int main(int argc, char **argv) {
 
     std::cout << "DB connection established." << std::endl;
 
-    lwpg::Results<CmdQueue> cmd_queue_results = pg.query<CmdQueue>(CmdQueue::SELECT);
+    lwpg::Results<CmdQueue> cmd_queue_results = pg.query<CmdQueue>(CmdQueue::SELECT_STMT);
     std::unordered_map<std::string, CmdQueueRunner> cmd_queue_runners;
 
     for (CmdQueue cmd_queue : cmd_queue_results)

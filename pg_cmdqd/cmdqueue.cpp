@@ -6,7 +6,8 @@
 #include "lwpg_result.h"
 #include "utils.h"
 
-const std::string CmdQueue::SELECT = R"SQL(
+// TODO: Add _STMT suffix
+const std::string CmdQueue::SELECT_STMT = R"SQL(
     SELECT
         (parse_ident(queue_cmd_class::regclass::text))[
             array_upper(parse_ident(queue_cmd_class::regclass::text), 1)

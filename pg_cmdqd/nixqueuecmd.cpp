@@ -19,7 +19,7 @@
 #include "lwpg_hstore.h"
 #include "utils.h"
 
-#define PGCMDQ_PIPE_BUFFER_SIZE 512
+#define CMDQD_PIPE_BUFFER_SIZE 512
 
 NixQueueCmd::NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
 {
@@ -134,8 +134,8 @@ void NixQueueCmd::run_cmd()
             { stderr_fd[0], POLLIN | POLLERR, 0 }
         };
 
-        char stdout_buf[PGCMDQ_PIPE_BUFFER_SIZE];
-        char stderr_buf[PGCMDQ_PIPE_BUFFER_SIZE];
+        char stdout_buf[CMDQD_PIPE_BUFFER_SIZE];
+        char stderr_buf[CMDQD_PIPE_BUFFER_SIZE];
         ssize_t stdout_bytes_read = 0;  // non-cumulative
         ssize_t stderr_bytes_read = 0;  // non-cumulative
         ssize_t stdin_bytes_written = 0;  // cumulative
@@ -165,7 +165,7 @@ void NixQueueCmd::run_cmd()
                         stdin_bytes_written += write(
                             stdin_fd[1],
                             this->cmd_stdin.c_str()+stdin_bytes_written,
-                            std::min<int>(this->cmd_stdin.length()-stdin_bytes_written, PGCMDQ_PIPE_BUFFER_SIZE)
+                            std::min<int>(this->cmd_stdin.length()-stdin_bytes_written, CMDQD_PIPE_BUFFER_SIZE)
                         );
                     }
                     // TODO: What happens on close([0-2]) in the child?
@@ -178,7 +178,7 @@ void NixQueueCmd::run_cmd()
                     }
 
                     // TODO: Moeten die `std:string`s eerst nog leeg geinitialiseerd worden?
-                    while ((stdout_bytes_read = read(stdout_fd[0], &stdout_buf, PGCMDQ_PIPE_BUFFER_SIZE)) > 0)
+                    while ((stdout_bytes_read = read(stdout_fd[0], &stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
                         this->cmd_stdout += std::string(stdout_buf, stdout_bytes_read);
                 }
                 if (fds[2].revents & POLLIN)
@@ -188,7 +188,7 @@ void NixQueueCmd::run_cmd()
                         throw std::runtime_error(strerror(errno));
                     }
 
-                    while ((stderr_bytes_read = read(stderr_fd[0], &stderr_buf, PGCMDQ_PIPE_BUFFER_SIZE)) > 0)
+                    while ((stderr_bytes_read = read(stderr_fd[0], &stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
                         this->cmd_stderr += std::string(stderr_buf, stderr_bytes_read);
                 }
             }

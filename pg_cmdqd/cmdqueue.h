@@ -11,7 +11,7 @@
 class CmdQueue
 {
 public:
-    static const std::string SELECT;
+    static const std::string SELECT_STMT;
 
     std::string queue_cmd_relname;
     std::string queue_cmd_class;

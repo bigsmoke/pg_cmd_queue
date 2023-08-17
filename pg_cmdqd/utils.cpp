@@ -3,6 +3,8 @@
 #include <cstring>
 #include <cstdarg>
 
+#include <signal.h>
+
 std::string formatString(const std::string str, ...)
 {
     char buf[512];
@@ -16,4 +18,13 @@ std::string formatString(const std::string str, ...)
     std::string result(buf, len);
 
     return result;
+}
+
+int maskAllSignalsCurrentThread()
+{
+    sigset_t set;
+    sigfillset(&set);
+
+    int r = pthread_sigmask(SIG_SETMASK, &set, NULL);
+    return r;
 }

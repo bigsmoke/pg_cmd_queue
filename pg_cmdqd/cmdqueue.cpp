@@ -11,7 +11,7 @@ const std::string CmdQueue::SELECT_STMT = R"SQL(
     SELECT
         (parse_ident(queue_cmd_class::regclass::text))[
             array_upper(parse_ident(queue_cmd_class::regclass::text), 1)
-        ] as queue_cmd_class
+        ] as queue_cmd_relname
         ,(parse_ident(queue_signature_class::regclass::text))[
             array_upper(parse_ident(queue_signature_class::regclass::text), 1)
         ] as queue_signature_class
@@ -34,7 +34,7 @@ CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::un
 {
     try
     {
-        queue_cmd_class = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_class"));
+        queue_cmd_relname = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_relname"));
         queue_signature_class = PQgetvalue(result->get(), row, fieldMapping.at("queue_signature_class"));
 
         if (not PQgetisnull(result->get(), row, fieldMapping.at("queue_runner_euid")))
@@ -60,7 +60,7 @@ CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::un
     }
     catch (std::exception &ex)
     {
-        std::cerr << "Error parsing user data for '" << this->queue_cmd_class.c_str() << "': " << ex.what();
+        _validation_error_message = formatString("Error parsing user data for '%s': %s", this->queue_cmd_relname.c_str(), ex.what());
         _is_valid = false;
     }
 }
@@ -68,4 +68,9 @@ CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::un
 bool CmdQueue::is_valid() const
 {
     return this->_is_valid;
+}
+
+std::string CmdQueue::validation_error_message() const
+{
+    return this->_validation_error_message;
 }

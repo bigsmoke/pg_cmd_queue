@@ -1,8 +1,9 @@
 #include "lwpg_nullable.h"
 
+#include <optional>
 #include <string>
 
-lwpg::nullable_string lwpg::getnullable(const PGresult *res, int row_number, int column_number)
+std::optional<std::string> lwpg::getnullable(const PGresult *res, int row_number, int column_number)
 {
     if (PQgetisnull(res, row_number, column_number))
     {
@@ -12,7 +13,7 @@ lwpg::nullable_string lwpg::getnullable(const PGresult *res, int row_number, int
     return PQgetvalue(res, row_number, column_number);
 }
 
-lwpg::nullable_string lwpg::to_nullable_string(const lwpg::nullable_int& orig)
+std::optional<std::string> lwpg::to_nullable_string(const std::optional<int>& orig)
 {
     if (not orig.has_value())
         return {};

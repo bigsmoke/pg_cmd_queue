@@ -5,12 +5,14 @@
 
 #include "lwpg_context.h"
 #include "cmdqueue.h"
+#include "logger.h"
 
 class CmdQueueRunner
 {
     bool _keep_running = true;
     CmdQueue _cmd_queue;
     std::string _conn_str;
+    Logger *logger = Logger::getInstance();
 
     void _run();
 

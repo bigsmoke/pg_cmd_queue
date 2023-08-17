@@ -34,3 +34,7 @@
 # cmake build stuff
 Release
 Debug
+compile_commands.json
+
+# clang
+.clangd

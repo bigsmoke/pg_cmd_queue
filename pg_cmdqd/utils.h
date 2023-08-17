@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <errno.h>
+
 #include <string>
 
 template<typename T> int check(int rc)
@@ -18,5 +19,7 @@ template<typename T> int check(int rc)
 }
 
 std::string formatString(const std::string str, ...);
+
+int maskAllSignalsCurrentThread();
 
 #endif // UTILS_H

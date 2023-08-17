@@ -1,7 +1,7 @@
 #include "lwpg_context.h"
 #include "lwpg_result_iterator.h"
 
-void lwpg::Context::connectdb(const std::string &conninfo)
+std::shared_ptr<lwpg::Conn> lwpg::Context::connectdb(const std::string &conninfo)
 {
     conn = std::make_shared<lwpg::Conn>(PQconnectdb(conninfo.c_str()));
 
@@ -10,6 +10,8 @@ void lwpg::Context::connectdb(const std::string &conninfo)
         std::string error(PQerrorMessage(conn->get()));
         throw std::runtime_error(error);
     }
+
+    return conn;
 }
 
 void lwpg::Context::exec(const std::string &query)
@@ -17,6 +19,7 @@ void lwpg::Context::exec(const std::string &query)
     if (!this->conn)
         throw std::runtime_error("No connection");
 
+    logger->log(LOG_DEBUG5, "lwpg::Context::exec() %s", query.c_str());
     std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
 
     if (result->getResultStatus() != PGRES_COMMAND_OK)
@@ -26,21 +29,19 @@ void lwpg::Context::exec(const std::string &query)
     }
 }
 
-void lwpg::Context::exec(const std::string &query, const std::vector<std::string> &params)
+void lwpg::Context::exec(const std::string &query, const std::vector<std::optional<std::string>> &params)
 {
     if (!this->conn)
         throw std::runtime_error("No connection");
 
-    const char *values[params.size()];
-    int i = 0;
-    for (const std::string &param : params)
-    {
-        values[i++] = param.c_str();
-    }
+    std::vector<char *> values(params.size());
+    values.clear();
+    for (const std::optional<std::string> &param : params)
+        values.push_back(param ? const_cast<char*>(param.value().c_str()) : nullptr);
 
+    logger->log(LOG_DEBUG5, "lwpg::Context::exec() %s", query.c_str());
     std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexecParams(conn->get(),
-        query.c_str(), params.size(),  nullptr, values, nullptr, nullptr, 0) );
-
+        query.c_str(), values.size(),  nullptr, values.data(), nullptr, nullptr, 0) );
 
     if (result->getResultStatus() != PGRES_COMMAND_OK)
     {
@@ -53,11 +54,6 @@ void lwpg::Context::exec(const std::string &query, const std::vector<std::string
         std::string error(PQerrorMessage(conn->get()));
         throw std::runtime_error(error);
     }
-}
-
-std::shared_ptr<lwpg::Conn> lwpg::Context::get_conn()
-{
-    return conn;
 }
 
 int lwpg::Context::socket() const

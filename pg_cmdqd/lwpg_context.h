@@ -5,6 +5,7 @@
 
 #include "postgresql/libpq-fe.h"
 
+#include "logger.h"
 #include "lwpg_conn.h"
 #include "lwpg_result.h"
 #include "lwpg_results.h"
@@ -18,9 +19,10 @@ namespace lwpg
     class Context
     {
         std::shared_ptr<Conn> conn;  // TODO: Make public or prefix with underscore
+        Logger *logger = Logger::getInstance();
 
     public:
-        void connectdb(const std::string &conninfo);
+        std::shared_ptr<Conn> connectdb(const std::string &conninfo);
 
         template<typename T>
         lwpg::Results<T> query(const std::string &query)
@@ -28,6 +30,7 @@ namespace lwpg
             if (!this->conn)
                 throw std::runtime_error("No connection");
 
+            logger->log(LOG_DEBUG5, "lwpg::Context::query() %s", query.c_str());
             std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
 
             if (result->getResultStatus() != PGRES_TUPLES_OK)
@@ -45,11 +48,12 @@ namespace lwpg
         }
 
         template<typename T>
-        T query1(const std::string &query)
+        std::optional<T> query1(const std::string &query)
         {
             if (!this->conn)
                 throw std::runtime_error("No connection");
 
+            logger->log(LOG_DEBUG5, "lwpg::Context::query1() %s", query.c_str());
             std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexec(conn->get(), query.c_str()));
 
             if (result->getResultStatus() != PGRES_TUPLES_OK)
@@ -59,13 +63,13 @@ namespace lwpg
             }
 
             int row_count = PQntuples(result->get());
-            if (row_count > 0)
-            {
-                throw std::runtime_error("Too many rows");
-            }
+            if (row_count > 1)
+                throw std::runtime_error("Too many rows; only one row expected");
+            if (row_count == 0)
+                return std::nullopt;
 
             int fieldCount = PQnfields(result->get());
-            std::unordered_map<std::string, std::string> fieldMappings;
+            std::unordered_map<std::string, int> fieldMappings;
             for (int i = 0; i < fieldCount; i++)
             {
                 std::string value = PQfname(result->get(), i);
@@ -77,18 +81,19 @@ namespace lwpg
         }
 
         template<typename T>
-        lwpg::Results<T> query(const std::string &query, const std::vector<std::string> &params)
+        lwpg::Results<T> query(const std::string &query, const std::vector<std::optional<std::string>> &params)
         {
             if (!this->conn)
                 throw std::runtime_error("No connection");
 
             const char *values[params.size()];
             int i = 0;
-            for (const std::string &param : params)
+            for (const std::optional<std::string> &param : params)
             {
-                values[i++] = param.c_str();
+                values[i++] = param ? param.value().c_str() : nullptr;
             }
 
+            logger->log(LOG_DEBUG5, "lwpg::Context::query() %s", query.c_str());
             std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexecParams(conn->get(),
                 query.c_str(), params.size(),  nullptr, values, nullptr, nullptr, 0) );
 
@@ -106,11 +111,51 @@ namespace lwpg
             return results;
         }
 
-        void exec(const std::string &query);
-        void exec(const std::string &query, const std::vector<std::string> &params);
+        template<typename T>
+        std::optional<T> query1(const std::string &query, const std::vector<std::optional<std::string>> &params)
+        {
+            if (!this->conn)
+                throw std::runtime_error("No connection");
 
-        std::shared_ptr<Conn> get_conn();  // TODO: Ask Wiebe: Misschien beter gewoon public maken?
-        int socket() const;  // TODO: Ask Wiebe: should this indeed be const?
+            const char *values[params.size()];
+            int i = 0;
+            for (const std::optional<std::string> &param : params)
+            {
+                values[i++] = param ? param.value().c_str() : nullptr;
+            }
+
+            logger->log(LOG_DEBUG5, "lwpg::Context::query1() %s", query.c_str());
+            std::shared_ptr<lwpg::Result> result = std::make_shared<lwpg::Result>(PQexecParams(conn->get(),
+                query.c_str(), params.size(),  nullptr, values, nullptr, nullptr, 0) );
+
+            if (result->getResultStatus() != PGRES_TUPLES_OK)
+            {
+                std::string error(PQerrorMessage(conn->get()));
+                throw std::runtime_error(error);
+            }
+
+            int rowCount = PQntuples(result->get());
+            if (rowCount > 1)
+                throw std::runtime_error("Too many rows; only one row expected");
+            if (rowCount == 0)
+                return std::nullopt;
+
+            int fieldCount = PQnfields(result->get());
+            std::unordered_map<std::string, std::string> fieldMappings;
+            for (int i = 0; i < fieldCount; i++)
+            {
+                std::string value = PQfname(result->get(), i);
+                fieldMappings[value] = i;
+            }
+
+            T t(result, 0, fieldMappings);
+            return t;
+        }
+
+        void exec(const std::string &query);
+        void exec(const std::string &query, const std::vector<std::optional<std::string>> &params);
+
+        int socket() const;
     };
 }
 

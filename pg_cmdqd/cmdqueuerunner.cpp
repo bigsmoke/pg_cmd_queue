@@ -8,8 +8,8 @@
 #include <unistd.h>
 
 #include "utils.h"
+#include "logger.h"
 #include "lwpg_context.h"
-#include "nixqueuecmdcontext.h"
 #include "nixqueuecmd.h"
 
 #define MAX_PG_EPOLL_EVENTS 20
@@ -30,12 +30,14 @@ void CmdQueueRunner::_run()
     struct epoll_event events[MAX_PG_EPOLL_EVENTS];
     memset(&events, 0, sizeof (struct epoll_event)*MAX_PG_EPOLL_EVENTS);
 
-    std::cout << "Runner thread " << _cmd_queue.queue_cmd_class << ": connecting to database…" << std::endl;
+    logger->log(
+        LOG_INFO,
+        "Runner thread \x1b[1m%s\x1b[0m: connecting to database…",
+        _cmd_queue.queue_cmd_relname.c_str()
+    );
 
     lwpg::Context pg;
     pg.connectdb(_conn_str);
-
-    NixQueueCmdContext nix_queue_cmd_context(pg.get_conn(), _cmd_queue);
 
     // TODO: Log session characteristics
 
@@ -43,7 +45,12 @@ void CmdQueueRunner::_run()
 
     if (_cmd_queue.queue_runner_role)
     {
-        std::cout << "Runner thread " << _cmd_queue.queue_cmd_class << ": Setting role to " << _cmd_queue.queue_runner_role.value() << std::endl;
+        logger->log(
+            LOG_INFO,
+            "Runner thread \x1b[1m%s\x1b[0m: Setting role to \x1b[1m%s\x1b[0m",
+            _cmd_queue.queue_cmd_relname.c_str(),
+            _cmd_queue.queue_runner_role.value().c_str()
+        );
         pg.exec("SET ROLE TO $1", {_cmd_queue.queue_runner_role.value()});
     }
 
@@ -51,13 +58,32 @@ void CmdQueueRunner::_run()
 
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pg.socket(), events);  // TODO: Check with Wiebe
 
+    pg.exec("BEGIN TRANSACTION");
+
     while (this->_keep_running)
     {
-        pg.exec("BEGIN TRANSACTION");
-        NixQueueCmd nix_queue_cmd = nix_queue_cmd_context.select_for_update();
-        nix_queue_cmd.run_cmd();
-        nix_queue_cmd_context.update(nix_queue_cmd);
-        pg.exec("COMMIT TRANSACTION");
+        std::optional<NixQueueCmd> nix_queue_cmd;
+
+        logger->log(
+            LOG_DEBUG3,
+            "Runner thread \x1b[1m%s\x1b[0m: Checking for item in queue…",
+            _cmd_queue.queue_cmd_relname.c_str()
+        );
+        if ((nix_queue_cmd = pg.query1<NixQueueCmd>(NixQueueCmd::select_stmt(_cmd_queue))))
+        {
+            nix_queue_cmd.value().run_cmd();
+
+            try
+            {
+                pg.exec(nix_queue_cmd.value().update_stmt(_cmd_queue), nix_queue_cmd.value().update_params());  // TODO: Drop argument; we should have it from the SELECT
+                pg.exec("COMMIT TRANSACTION AND CHAIN");
+            }
+            catch (const std::runtime_error &err)
+            {
+                logger->log(LOG_ERROR, "SQL UPDATE for command %s failed: %s", nix_queue_cmd.value().cmd_id.c_str(), err.what());
+                pg.exec("ROLLBACK TRANSACTION AND CHAIN");
+            }
+        }
 
         int fd_count = epoll_wait(epoll_fd, events, MAX_PG_EPOLL_EVENTS, this->_cmd_queue.queue_reselect_interval_msec);
         if (fd_count < 0)
@@ -67,8 +93,9 @@ void CmdQueueRunner::_run()
                 continue;
             }
         }
-        std::cout << "Jippie!" << std::endl;
     }
+
+    pg.exec("ROLLBACK TRANSACTION");
 
     close(epoll_fd);  // TODO: Ask Wiebe: should this not go in the destructor somehow to guarantee `close()`?
 }

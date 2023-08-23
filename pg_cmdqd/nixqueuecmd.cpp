@@ -78,8 +78,8 @@ std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue) const
 
 std::vector<std::optional<std::string>> NixQueueCmd::update_params() const
 {
-    std::vector<std::optional<std::string>> params(8);
-    params.clear();
+    std::vector<std::optional<std::string>> params;
+    params.reserve(8);
 
     params.push_back(cmd_id);
     params.push_back(cmd_subid);
@@ -201,20 +201,20 @@ void NixQueueCmd::run_cmd()
         getrlimit(RLIMIT_NOFILE, &rlim);
         for (rlim_t i = 3; i < rlim.rlim_cur; ++i) close (i);
 
-        std::vector<char *> argv_heads(this->cmd_argv.size() + 1);
-        argv_heads.clear();
+        std::vector<char *> argv_heads;
+        argv_heads.reserve(this->cmd_argv.size() + 1);
         for (const std::string &s : cmd_argv)
             argv_heads.push_back(const_cast<char*>(s.c_str()));
         argv_heads[argv_heads.size()-1] = nullptr;
         char **c_argv = argv_heads.data();
         // We don't have to worry about cleaning up c_argv, because execvpe will clear up all that.
 
-        std::vector<std::string> env_flat(this->cmd_env.size());
-        env_flat.clear();
+        std::vector<std::string> env_flat;
+        env_flat.reserve(this->cmd_env.size());
         for (const std::pair<const std::string, std::string> &var : this->cmd_env)
             env_flat.push_back(var.first + "=" + var.second);
-        std::vector<char *> envp_heads(this->cmd_env.size() + 1);
-        envp_heads.clear();
+        std::vector<char *> envp_heads;
+        envp_heads.reserve(this->cmd_env.size() + 1);
         for (const std::string &s : env_flat)
             envp_heads.push_back(const_cast<char*>(s.c_str()));
         envp_heads[envp_heads.size()-1] = nullptr;

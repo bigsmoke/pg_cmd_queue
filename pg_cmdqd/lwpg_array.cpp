@@ -3,8 +3,13 @@
 #include <cassert>
 #include <vector>
 
+#include "logger.h"
+
 std::vector<std::string> lwpg::array_to_vector(const std::string &input)
 {
+    Logger *logger = Logger::getInstance();
+    logger->log(LOG_DEBUG5, "%s", input.c_str());
+
     std::vector<std::string> result;
     int depth = 0;
     bool in_quotes = false;
@@ -12,9 +17,8 @@ std::vector<std::string> lwpg::array_to_vector(const std::string &input)
     std::string::size_type start_pos = 0;
     std::string::size_type end_pos = 0;
 
-#ifndef TESTING
     assert(input.at(0) == '{');
-#endif
+    assert(input.back() == '}');
 
     for (std::string::size_type i = 0; i < input.size(); ++i)
     {
@@ -28,7 +32,7 @@ std::vector<std::string> lwpg::array_to_vector(const std::string &input)
         }
         else if (input.at(i) == '}' && not in_quotes)
         {
-            if (--depth == 1 && end_pos == 0)
+            if (depth-- == 1 && end_pos == 0)
             {
                 end_pos = i-1;
             }
@@ -54,7 +58,7 @@ std::vector<std::string> lwpg::array_to_vector(const std::string &input)
 
         if (start_pos > 0 && end_pos > 0)
         {
-            result.push_back(input.substr(start_pos, end_pos-start_pos));
+            result.push_back(input.substr(start_pos, end_pos-start_pos+1));
             start_pos = i+1;
             end_pos = 0;
         }

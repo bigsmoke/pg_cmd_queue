@@ -1,5 +1,6 @@
 #include "nixqueuecmd.h"
 
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <string.h>
@@ -14,9 +15,11 @@
 #include <memory>
 
 #include "cmdqueue.h"
+#include "fdguard.h"
 #include "lwpg_result.h"
 #include "lwpg_array.h"
 #include "lwpg_hstore.h"
+#include "pipefds.h"
 #include "utils.h"
 
 #define CMDQD_PIPE_BUFFER_SIZE 512
@@ -140,14 +143,14 @@ bool NixQueueCmd::is_valid() const
 std::string NixQueueCmd::cmd_line() const
 {
     std::string line;
-    // TODO: Use stringstream?
 
-    for (size_t i = 0; i < this->cmd_argv.size(); i++)
+    int i = 0;
+    for (const std::string &arg : this->cmd_argv)
     {
-        if (i > 0)
+        if (i++ > 0)
             line += " ";
         // TODO: quoting if necessary
-        line += this->cmd_argv[i];
+        line += arg;
     }
 
     return line;
@@ -160,7 +163,9 @@ bool NixQueueCmd::cmd_succeeded() const
 
 void NixQueueCmd::run_cmd()
 {
-    this->cmd_runtime_start = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 1000;
+    //auto start_time = std::chrono::system_clock::now();
+    //auto a = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
+    this->cmd_runtime_start = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 1000000;
 
     // TODO: Ask Wiebe: Why catch signals _before_ doing the fork?
     /*
@@ -170,15 +175,15 @@ void NixQueueCmd::run_cmd()
     }
     */
 
-    // TODO: fdguard jatten van https://github.com/victronenergy/dbus-flashmq/blob/master/src/utils.cpp#L125
-    int stdin_fd[2], stdout_fd[2], stderr_fd[2];
+    logger->log(
+        LOG_DEBUG3,
+        "\x1b[1m%s\x1b[22m runner: command \x1b[1m%s\x1b[22m: \x1b[1m%s\x1b[22m",
+        queue_cmd_relname.c_str(),
+        cmd_id.c_str(),
+        cmd_line().c_str()
+    );
 
-    if (pipe(stdin_fd) == -1)
-        throw std::runtime_error(strerror(errno));
-    if (pipe(stdout_fd) == -1)
-        throw std::runtime_error(strerror(errno));
-    if (pipe(stderr_fd) == -1)
-        throw std::runtime_error(strerror(errno));
+    PipeFds stdin_fds, stdout_fds, stderr_fds;
 
     pid_t pid = fork();
     if (pid == -1)
@@ -186,14 +191,16 @@ void NixQueueCmd::run_cmd()
         throw std::runtime_error(strerror(errno));
     }
 
-    if (pid == 0)
+    if (pid == 0)  // pid == 0 ⇒ We're in a forked child process
     {
-        close(stdin_fd[1]);  // Close unused write end of STDIN. */
-        close(stdout_fd[0]);  // Close unused read end of STDOUT. */
-        close(stderr_fd[0]);  // Close unused read end of STDERR. */
-        while ((dup2(stdin_fd[0], STDIN_FILENO) == -1) && (errno == EINTR)) {}
-        while ((dup2(stdout_fd[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
-        while ((dup2(stderr_fd[1], STDERR_FILENO) == -1) && (errno == EINTR)) {}
+        // Close the end of each pipe that we won't need in the child process
+        stdin_fds.close_write_fd();
+        stdout_fds.close_read_fd();
+        stderr_fds.close_read_fd();
+
+        while ((dup2(stdin_fds.read_fd(), STDIN_FILENO) == -1) && (errno == EINTR)) {}
+        while ((dup2(stdout_fds.write_fd(), STDOUT_FILENO) == -1) && (errno == EINTR)) {}
+        while ((dup2(stderr_fds.write_fd(), STDERR_FILENO) == -1) && (errno == EINTR)) {}
 
         // Brute force close any open file/socket, because I don't want the child to see them.
         struct rlimit rlim;
@@ -229,30 +236,38 @@ void NixQueueCmd::run_cmd()
     }
     else
     {
-        logger->log(LOG_DEBUG2, "fork() child PID = %jd\n", (intmax_t) pid);
+        logger->log(
+            LOG_DEBUG4,
+            "\x1b[1m%s\x1b[22m runner: fork() child PID = \x1b[1m%jd\x1b[22m\n",
+            queue_cmd_relname.c_str(),
+            (intmax_t) pid
+        );
 
-        int pid_fd = pidfd_open(pid, 0);
-        if (pid_fd == -1)
-            throw std::runtime_error(strerror(errno));
+        FdGuard pid_fd(pidfd_open(pid, 0));
 
-        close(stdin_fd[0]);  // Close unused read end of STDIN. */
-        close(stdout_fd[1]);  // Close unused write end of STDOUT. */
-        close(stderr_fd[1]);  // Close unused write end of STDERR. */
+        // Close the end of each pipe that we won't need in the parent process
+        stdin_fds.close_read_fd();
+        stdout_fds.close_write_fd();
+        stderr_fds.close_write_fd();
+
+        // Make the parent ends of the pipes non-blocking
+        fcntl(stdin_fds.write_fd(), F_SETFL, fcntl(stdin_fds.write_fd(), F_GETFL) | O_NONBLOCK);
+        fcntl(stdout_fds.read_fd(), F_SETFL, fcntl(stdout_fds.read_fd(), F_GETFL) | O_NONBLOCK);
+        fcntl(stderr_fds.read_fd(), F_SETFL, fcntl(stderr_fds.read_fd(), F_GETFL) | O_NONBLOCK);
 
         struct pollfd fds[] = {
-            { stdin_fd[1], POLLOUT | POLLHUP | POLLERR, 0 },
-            { stdout_fd[0], POLLIN | POLLHUP | POLLERR, 0 },
-            { stderr_fd[0], POLLIN | POLLHUP | POLLERR, 0 },
-            { pid_fd, POLLIN | POLLERR, 0 },
+            { stdin_fds.write_fd(), static_cast<short>((cmd_stdin.empty() ? POLLOUT : 0) | POLLHUP | POLLERR), 0 },
+            { stdout_fds.read_fd(), POLLIN | POLLHUP | POLLERR, 0 },
+            { stderr_fds.read_fd(), POLLIN | POLLHUP | POLLERR, 0 },
+            { pid_fd.fd(), POLLIN | POLLERR, 0 },
         };
 
         char stdout_buf[CMDQD_PIPE_BUFFER_SIZE];
         char stderr_buf[CMDQD_PIPE_BUFFER_SIZE];
-        ssize_t stdout_bytes_read = 0;  // non-cumulative
-        ssize_t stderr_bytes_read = 0;  // non-cumulative
-        ssize_t stdin_bytes_written = 0;  // cumulative
+        ssize_t cum_stdin_bytes_written = 0;
 
         // TODO: ignore interrupts & handle errors (close pipes, read exit code, etc)
+        // TODO: kill -9
         int fd_count;
         while (true)
         {
@@ -265,46 +280,32 @@ void NixQueueCmd::run_cmd()
             }
             if (fd_count > 0)
             {
-                if ((not cmd_stdin.empty()) and fds[0].revents & POLLOUT)
+                if (fds[0].revents & POLLOUT)
                 {
-                    logger->log(LOG_DEBUG5, "Pre");
-                    while (stdin_bytes_written < (ssize_t)cmd_stdin.length())
+                    while (cum_stdin_bytes_written < (ssize_t)cmd_stdin.length())
                     {
-                        stdin_bytes_written += write(
-                            stdin_fd[1],
-                            this->cmd_stdin.c_str()+stdin_bytes_written,
-                            std::min<int>(this->cmd_stdin.length()-stdin_bytes_written, CMDQD_PIPE_BUFFER_SIZE)
+                        ssize_t stdin_bytes_written = write(
+                            stdin_fds.write_fd(),
+                            this->cmd_stdin.c_str()+cum_stdin_bytes_written,
+                            this->cmd_stdin.length()-cum_stdin_bytes_written
                         );
+                        // TODO: Handle EINTER and other errors
+                        cum_stdin_bytes_written += stdin_bytes_written;
                     }
-                    logger->log(LOG_DEBUG5, "Post");
                 }
                 if (fds[1].revents & POLLIN)
                 {
-                    while ((stdout_bytes_read = read(stdout_fd[0], &stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
+                    // TODO: Handle EINTER
+                    ssize_t stdout_bytes_read = 0;
+                    while ((stdout_bytes_read = read(stdout_fds.read_fd(), &stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
                         this->cmd_stdout += std::string(stdout_buf, stdout_bytes_read);
                 }
                 if (fds[2].revents & POLLIN)
                 {
-                    while ((stderr_bytes_read = read(stderr_fd[0], &stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
+                    // TODO: Handle EINTER
+                    ssize_t stderr_bytes_read = 0;
+                    while ((stderr_bytes_read = read(stderr_fds.read_fd(), &stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
                         this->cmd_stderr += std::string(stderr_buf, stderr_bytes_read);
-                }
-
-                if (fds[0].revents & POLLHUP)
-                {
-                    logger->log(LOG_DEBUG5, "Child %i closed STDIN", pid);
-                    close(fds[0].fd);
-                }
-                if (fds[1].revents & POLLHUP)
-                {
-                    logger->log(LOG_DEBUG5, "Child %i closed STDOUT", pid);
-                    close(fds[1].fd);
-                    break;
-                }
-                if (fds[2].revents & POLLHUP)
-                {
-                    logger->log(LOG_DEBUG5, "Child %i closed STDERR", pid);
-                    close(fds[2].fd);
-                    break;
                 }
 
                 if (fds[3].revents & POLLIN)
@@ -313,6 +314,8 @@ void NixQueueCmd::run_cmd()
                     close(fds[3].fd);
                     break;
                 }
+
+                // FIXME: POLLERR
             } // if (fd_count > 0)
         } // while (true)
 
@@ -366,5 +369,5 @@ void NixQueueCmd::run_cmd()
         }
     }
 
-    this->cmd_runtime_end = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 1000;
+    this->cmd_runtime_end = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 1000000;
 }

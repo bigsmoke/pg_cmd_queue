@@ -20,6 +20,8 @@ add_executable(pg_cmd_queue_daemon
     lwpg_result.h lwpg_result.cpp
     lwpg_result_iterator.h lwpg_result_iterator.cpp
     lwpg_results.h lwpg_results.cpp
+    fdguard.h fdguard.cpp
+    pipefds.h pipefds.cpp
     cmdqueue.h cmdqueue.cpp
     cmdqueuerunner.h cmdqueuerunner.cpp
     nixqueuecmd.h nixqueuecmd.cpp

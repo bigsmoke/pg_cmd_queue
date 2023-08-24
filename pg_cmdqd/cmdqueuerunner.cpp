@@ -32,7 +32,7 @@ void CmdQueueRunner::_run()
 
     logger->log(
         LOG_INFO,
-        "Runner thread \x1b[1m%s\x1b[0m: connecting to database…",
+        "\x1b[1m%s\x1b[22m runner: connecting to database…",
         _cmd_queue.queue_cmd_relname.c_str()
     );
 
@@ -47,7 +47,7 @@ void CmdQueueRunner::_run()
     {
         logger->log(
             LOG_INFO,
-            "Runner thread \x1b[1m%s\x1b[0m: Setting role to \x1b[1m%s\x1b[0m",
+            "\x1b[1m%s\x1b[22m runner: Setting role to \x1b[1m%s\x1b[0m",
             _cmd_queue.queue_cmd_relname.c_str(),
             _cmd_queue.queue_runner_role.value().c_str()
         );
@@ -66,7 +66,7 @@ void CmdQueueRunner::_run()
 
         logger->log(
             LOG_DEBUG3,
-            "Runner thread \x1b[1m%s\x1b[0m: Checking for item in queue…",
+            "\x1b[1m%s\x1b[22m runner: checking for item in queue…",
             _cmd_queue.queue_cmd_relname.c_str()
         );
         if ((nix_queue_cmd = pg.query1<NixQueueCmd>(NixQueueCmd::select_stmt(_cmd_queue))))

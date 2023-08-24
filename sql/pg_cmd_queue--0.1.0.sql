@@ -259,6 +259,9 @@ create table cmd_queue (
     ,queue_reselect_interval interval
         not null
         default '5 minutes'::interval
+    ,queue_cmd_timeout interval
+        not null
+        default '1 hour'::interval
     ,queue_wait_time_limit_warn interval
     ,queue_wait_time_limit_crit interval
     ,queue_created_at timestamptz
@@ -473,6 +476,7 @@ $md$;
 
 --------------------------------------------------------------------------------------------------------------
 
+-- FIXME: BEFORE or AFTER?
 create function queue_cmd__delete_after_update()
     returns trigger
     language plpgsql
@@ -492,7 +496,7 @@ begin
     end if;
 
     execute format(
-        'DELETE FROM %s WHERE cmd_id = ($1).%I and cmd_subid = ($1).%I'
+        'DELETE FROM %s WHERE cmd_id = ($1).%I and cmd_subid IS NOT DISTINCT FROM ($1).%I'
         ,tg_relid
         ,_cmd_id_field
         ,_cmd_subid_field
@@ -562,13 +566,26 @@ create table nix_queue_cmd_template (
             cmd_runtime
             ,lower(cmd_runtime)
             ,upper(cmd_runtime)
-            ,cmd_exit_code
-            ,cmd_term_sig
+            ,cmd_exit_code  -- We expect either `cmd_exit_code` _or_ `cmd_term_sig`, not both.
+            ,cmd_term_sig   -- We expect either `cmd_exit_code` _or_ `cmd_term_sig`, not both.
             ,cmd_stdout
             ,cmd_stderr
         ) in (0, 6)
     )
 );
+
+comment on column nix_queue_cmd_template.cmd_term_sig is
+$md$If the command exited abnormally, this field should hold the signal with which it exited.
+
+In Unixy systems, a command exits either:
+  (a) with an exit code, _or_
+  (b) with a termination signal.
+
+Though not all *nix signals are standardized across different Unix variants,
+termination signals _are_ part of POSIX; see
+[Wikipedia](https://en.wikipedia.org/wiki/Signal_(IPC)#Default_action) and
+[GNU](https://www.gnu.org/software/libc/manual/html_node/Termination-Signals.html).
+$md$;
 
 create trigger no_insert
     before insert
@@ -1045,6 +1062,147 @@ begin
 
     elsif test_stage$ = 'post-restore' then
         assert (select count(*) from cmdq.cmd_queue) = 1;
+    end if;
+end;
+$$;
+
+----------------------------------------------------------------------------------------------------------
+
+create procedure test_integration__pg_cmdqd(test_stage$ text)
+    set search_path from current
+    set plpgsql.check_asserts to true
+    language plpgsql
+    as $$
+declare
+    _cmd record;
+    _cmd_id text;
+    _wait_start timestamptz;
+begin
+    assert test_stage$ in ('init', 'run', 'clean');
+
+    if test_stage$ = 'init' then
+        create table tst1_nix_cmd (
+            like nix_queue_cmd_template
+                including all
+        );
+        alter table tst1_nix_cmd
+            alter column queue_cmd_class set default 'tst1_nix_cmd';
+
+        insert into cmd_queue (
+            queue_cmd_class
+            ,queue_signature_class
+            ,queue_runner_role
+            ,queue_notify_channel
+            ,queue_reselect_interval
+            ,queue_cmd_timeout
+        )
+        values (
+            'tst1_nix_cmd'
+            ,'nix_queue_cmd_template'
+            ,'cmdq_test_role'
+            ,'tst1_nix_cmd'
+            ,'0 seconds'::interval  -- Let the daemon's epoll() loop go without pause
+            ,'1 second'::interval
+        );
+
+    elsif test_stage$ = 'run' then
+        insert into tst1_nix_cmd (
+            cmd_id
+            ,cmd_argv
+            ,cmd_env
+            ,cmd_stdin
+        )
+        values (
+            'cmd-with-clean-exit'
+            ,array[
+                'pg_cmdq_test_cmd'
+                ,'--stdout-line'
+                ,'This line should be sent to STDOUT.'
+                ,'--stderr-line'
+                ,'This line is to be sent to STDERR.'
+                ,'--echo-stdin'
+                ,'--stdout-line'
+                ,'This line should be printed after the echoed STDIN.'
+                ,'--echo-env-var'
+                ,'PG_CMDQ_TST_VAR1'
+                ,'--stdout-line'
+                ,'This line should be squeezed between 2 env. variables.'
+                ,'--echo-env-var'
+                ,'PG_CMDQ_TST_VAR2'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,'PG_CMDQ_TST_VAR1=>var1_value",PG_CMDQ_TST_VAR2=>"var2: with => signs, \\ and \""'::hstore
+            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+        )
+        returning cmd_id into _cmd_id
+        ;
+
+        _wait_start := clock_timestamp();
+        <<wait>>
+        loop
+            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
+            exit when found;
+            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
+                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
+            end if;
+            pg_sleep(0.001);  -- seconds
+        end loop;
+
+        assert _cmd.cmd_stdout = $out$This line should be sent to STDOUT.
+This STDIN should be echoed to STDOUT,
+including this 2nd line.
+This line should be printed after the echoed STDIN.
+var1_value
+This line should be squeezed between 2 env. variables.
+var2: with => signs, \ and "
+$out$;
+        assert _cmd.cmd_stderr = E'This line is to be sent to STDERR.\n';
+        assert _cmd.cmd_exit_code = 0;
+        assert _cmd.cmd_term_sig is null;
+
+        insert into tst1_nix_cmd (
+            cmd_id
+            ,cmd_argv
+            ,cmd_env
+            ,cmd_stdin
+        )
+        values (
+            'cmd-exceeds-timeout'
+            ,array[
+                'pg_cmdq_test_cmd'
+                ,'--stdout-line'
+                ,'Line 1.'
+                ,'--sleep'
+                ,'10 seconds'::interval
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
+            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+        )
+        returning cmd_id into _cmd_id
+        ;
+
+        _wait_start := clock_timestamp();
+        <<wait>>
+        loop
+            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
+            exit when found;
+            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
+                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
+            end if;
+            pg_sleep(0.001);  -- seconds
+        end loop;
+
+        assert _cmd.cmd_stdout = E'Line 1.\n';
+        assert _cmd.cmd_stderr = '';
+        assert _cmd.cmd_exit_code is null;
+        assert _cmd.cmd_term_sig = 9, format('%s ≠ 9 (SIGKILL)', _cmd.cmd_term_sig);
+
+    elsif test_stage$ = 'clean' then
+        drop table tst1_nix_cmd cascade;
+        delete from cmd_queue where queue_cmd_class = 'tst1_nix_cmd';
     end if;
 end;
 $$;

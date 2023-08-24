@@ -8,8 +8,11 @@ class PipeFds
 public:
     PipeFds();
     ~PipeFds();
-    void close_for_reading();
-    void close_for_writing();
+    int* data();
+    int read_fd() const;
+    int write_fd() const;
+    void close_read_fd();
+    void close_write_fd();
 };
 
 #endif // PIPEFDS_H

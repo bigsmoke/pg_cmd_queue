@@ -100,7 +100,7 @@ int main(int argc, char **argv)
 
     logger->log(
         LOG_INFO,
-        "DB connection established to \x1b[1m%s\x1b[0m on \x1b[1m:\x1b[0m as \x1b[1m\x1b[0m",
+        "DB connection established to \x1b[1m%s\x1b[22m on \x1b[1m%s:%s\x1b[22m as \x1b[1m%s\x1b[22m",
         PQdb(conn->get()), PQhost(conn->get()), PQport(conn->get()), PQuser(conn->get())
     );
 

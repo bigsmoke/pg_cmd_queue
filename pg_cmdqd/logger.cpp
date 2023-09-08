@@ -103,18 +103,12 @@ std::string Logger::getLogLevelString(LogLevel level) const
     }
 }
 
+thread_local std::shared_ptr<CmdQueue> Logger::cmd_queue = nullptr;
+
 Logger *Logger::getInstance()
 {
     static Logger instance;
     return &instance;
-}
-
-void Logger::log(LogLevel level, const char *str, ...)
-{
-    va_list valist;
-    va_start(valist, str);
-    this->log(level, str, valist);
-    va_end(valist);
 }
 
 void Logger::queueReOpen()
@@ -226,7 +220,11 @@ void Logger::log(LogLevel level, const char *str, va_list valist)
     std::ostringstream oss;
 
     std::string str_(str);
-    oss << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] [" << getLogLevelString(level) << "] " << str_;
+    if (cmd_queue != nullptr) oss << "\x1b" << cmd_queue->ansi_fg;
+    oss << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] [";
+    if (cmd_queue != nullptr) oss << cmd_queue->queue_cmd_relname << "] [";
+    oss << getLogLevelString(level) << "] " << str_;
+    if (cmd_queue != nullptr) oss << "\x1b[0m";
     oss.flush();
     const std::string s = oss.str();
     const char *logfmtstring = s.c_str();
@@ -250,3 +248,58 @@ void Logger::log(LogLevel level, const char *str, va_list valist)
 
     sem_post(&linesPending);
 }
+
+void Logger::log(LogLevel level, const char *str, ...)
+{
+    va_list valist;
+    va_start(valist, str);
+    this->log(level, str, valist);
+    va_end(valist);
+}
+
+/*
+void Logger::log(LogLevel level, const CmdQueue &cmd_queue, const char *str, va_list valist)
+{
+    // TODO: DRY this method
+    if (level > curLogLevel)
+        return;
+
+    time_t time = std::time(nullptr);
+    struct tm tm = *std::localtime(&time);
+    std::ostringstream oss;
+
+    std::string str_(str);
+    oss << "\x1b" << cmd_queue.ansi_fg << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] ["
+        << cmd_queue.queue_cmd_relname << "] [" << getLogLevelString(level) << "] " << str_ << "\x1b[0m";
+    oss.flush();
+    const std::string s = oss.str();
+    const char *logfmtstring = s.c_str();
+
+    constexpr const int buf_size = 512;
+
+    char buf[buf_size + 1];
+    buf[buf_size] = 0;
+
+    va_list valist2;
+    va_copy(valist2, valist);
+    vsnprintf(buf, buf_size, logfmtstring, valist);
+    size_t len = std::min<size_t>(buf_size, strlen(buf));
+    LogLine line(buf, len, alsoLogToStd);
+    va_end(valist2);
+
+    {
+        std::lock_guard<std::mutex> locker(logMutex);
+        lines.push(std::move(line));
+    }
+
+    sem_post(&linesPending);
+}
+
+void Logger::log(LogLevel level, const CmdQueue &cmd_queue, const char *str, ...)
+{
+    va_list valist;
+    va_start(valist, str);
+    this->log(level, cmd_queue, str, valist);
+    va_end(valist);
+}
+*/

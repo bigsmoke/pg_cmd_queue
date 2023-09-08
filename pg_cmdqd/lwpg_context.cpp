@@ -48,12 +48,6 @@ void lwpg::Context::exec(const std::string &query, const std::vector<std::option
         std::string error(PQerrorMessage(conn->get()));
         throw std::runtime_error(error);
     }
-
-    if (result->getResultStatus() != PGRES_TUPLES_OK)
-    {
-        std::string error(PQerrorMessage(conn->get()));
-        throw std::runtime_error(error);
-    }
 }
 
 int lwpg::Context::socket() const

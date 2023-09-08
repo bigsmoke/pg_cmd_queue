@@ -1,12 +1,16 @@
 #ifndef CMDQUEUERUNNER_H
 #define CMDQUEUERUNNER_H
 
+#include <functional>
 #include <thread>
 
 #include "lwpg_context.h"
 #include "cmdqueue.h"
 #include "logger.h"
+#include "nixqueuecmd.h"
+#include "sqlqueuecmd.h"
 
+template <typename T>
 class CmdQueueRunner
 {
     bool _keep_running = true;
@@ -25,5 +29,8 @@ public:
 
     void stop_running();
 };
+
+template class CmdQueueRunner<NixQueueCmd>;
+template class CmdQueueRunner<SqlQueueCmd>;
 
 #endif // CMDQUEUERUNNER_H

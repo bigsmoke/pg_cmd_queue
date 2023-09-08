@@ -68,26 +68,25 @@ const std::string NixQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
         AND cmd_subid IS NOT DISTINCT from $2
 )SQL";
 
-
 std::string NixQueueCmd::select_stmt(const CmdQueue &cmd_queue)
 {
     return formatString(SELECT_STMT_WITHOUT_RELNAME, cmd_queue.queue_cmd_relname.c_str());
 }
 
-std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue) const
+std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue)
 {
     return formatString(UPDATE_STMT_WITHOUT_RELNAME, cmd_queue.queue_cmd_relname.c_str());
 }
 
-std::vector<std::optional<std::string>> NixQueueCmd::update_params() const
+std::vector<std::optional<std::string>> NixQueueCmd::update_params()
 {
     std::vector<std::optional<std::string>> params;
     params.reserve(8);
 
-    params.push_back(cmd_id);
-    params.push_back(cmd_subid);
-    params.push_back(formatString("%f", cmd_runtime_start));
-    params.push_back(formatString("%f", cmd_runtime_end));
+    params.push_back(meta.cmd_id);
+    params.push_back(meta.cmd_subid);
+    params.push_back(formatString("%f", meta.cmd_runtime_start));
+    params.push_back(formatString("%f", meta.cmd_runtime_end));
     params.push_back(lwpg::to_nullable_string(cmd_exit_code));
     params.push_back(lwpg::to_nullable_string(cmd_term_sig));
     params.push_back(cmd_stdout);
@@ -97,17 +96,10 @@ std::vector<std::optional<std::string>> NixQueueCmd::update_params() const
 }
 
 NixQueueCmd::NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
+    : meta(result, row, fieldMapping)
 {
     try
     {
-        queue_cmd_class = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_class"));
-
-        queue_cmd_relname = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_relname"));
-
-        cmd_id = PQgetvalue(result->get(), row, fieldMapping.at("cmd_id"));
-
-        cmd_subid = lwpg::getnullable(result->get(), row, fieldMapping.at("cmd_subid"));
-
         if (PQgetisnull(result->get(), row, fieldMapping.at("cmd_argv")))
         {
             throw std::domain_error("`cmd_argv` should never be `NULL`.");
@@ -130,14 +122,13 @@ NixQueueCmd::NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const s
     }
     catch (std::exception &ex)
     {
-        logger->log(LOG_ERROR, "Error parsing user data for '%s': %s", this->queue_cmd_class.c_str(), ex.what());
+        logger->log(LOG_ERROR, "Error parsing `%s` queue command data: %s", meta.queue_cmd_class.c_str(), ex.what());
         _is_valid = false;
     }
 }
 
-bool NixQueueCmd::is_valid() const
+NixQueueCmd::~NixQueueCmd()
 {
-    return _is_valid;
 }
 
 std::string NixQueueCmd::cmd_line() const
@@ -161,11 +152,9 @@ bool NixQueueCmd::cmd_succeeded() const
     return cmd_exit_code.has_value() and cmd_exit_code.value() == 0;
 }
 
-void NixQueueCmd::run_cmd()
+void NixQueueCmd::run_cmd(std::shared_ptr<lwpg::Conn> &conn)
 {
-    //auto start_time = std::chrono::system_clock::now();
-    //auto a = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
-    this->cmd_runtime_start = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 1000000;
+    meta.stamp_start_time();
 
     // TODO: Ask Wiebe: Why catch signals _before_ doing the fork?
     /*
@@ -176,10 +165,9 @@ void NixQueueCmd::run_cmd()
     */
 
     logger->log(
-        LOG_DEBUG3,
-        "\x1b[1m%s\x1b[22m runner: command \x1b[1m%s\x1b[22m: \x1b[1m%s\x1b[22m",
-        queue_cmd_relname.c_str(),
-        cmd_id.c_str(),
+        LOG_DEBUG3, "cmd_id = '%s'%s: \x1b[1m%s\x1b[22m",
+        meta.cmd_id.c_str(),
+        meta.cmd_subid ? std::string(" (cmd_subid = '" + meta.cmd_subid.value() + "')").c_str() : "",
         cmd_line().c_str()
     );
 
@@ -237,9 +225,9 @@ void NixQueueCmd::run_cmd()
     else
     {
         logger->log(
-            LOG_DEBUG4,
-            "\x1b[1m%s\x1b[22m runner: fork() child PID = \x1b[1m%jd\x1b[22m\n",
-            queue_cmd_relname.c_str(),
+            LOG_DEBUG4, "cmd_id = '%s'%s: fork() child PID = \x1b[1m%jd\x1b[22m",
+            meta.cmd_id.c_str(),
+            meta.cmd_subid ? std::string(" (cmd_subid = '" + meta.cmd_subid.value() + "')").c_str() : "",
             (intmax_t) pid
         );
 
@@ -360,14 +348,19 @@ void NixQueueCmd::run_cmd()
         if (not cmd_succeeded())
         {
             if (cmd_exit_code.has_value() and cmd_exit_code.value() != 0)
-                logger->log(LOG_ERROR, "Command %s exited with non-zero exit_code: %i", cmd_id.c_str(), cmd_exit_code.value());
+                logger->log(
+                    LOG_ERROR, "cmd_id = '%s'%s: exited with non-zero exit_code: %i",
+                    meta.cmd_id.c_str(),
+                    meta.cmd_subid ? std::string(" (cmd_subid = '" + meta.cmd_subid.value() + "')").c_str() : "",
+                    cmd_exit_code.value()
+                );
             if (cmd_term_sig.has_value())
-                logger->log(LOG_ERROR, "Command %s terminated with signal: %i / %s", cmd_id.c_str(), cmd_term_sig.value(), strsignal(cmd_term_sig.value()));
+                logger->log(LOG_ERROR, "Command %s terminated with signal: %i / %s", meta.cmd_id.c_str(), cmd_term_sig.value(), strsignal(cmd_term_sig.value()));
 
-            logger->log(LOG_DEBUG5, "Command %s STDOUT: %s", cmd_id.c_str(), cmd_stdout.c_str());
-            logger->log(LOG_DEBUG5, "Command %s STDERR: %s", cmd_id.c_str(), cmd_stderr.c_str());
+            logger->log(LOG_DEBUG5, "Command %s STDOUT: %s", meta.cmd_id.c_str(), cmd_stdout.c_str());
+            logger->log(LOG_DEBUG5, "Command %s STDERR: %s", meta.cmd_id.c_str(), cmd_stderr.c_str());
         }
     }
 
-    this->cmd_runtime_end = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 1000000;
+    meta.stamp_end_time();
 }

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "logger.h"
+#include "lwpg_string.h"
 
 std::vector<std::string> lwpg::array_to_vector(const std::string &input)
 {
@@ -65,4 +66,21 @@ std::vector<std::string> lwpg::array_to_vector(const std::string &input)
     }
 
     return result;
+}
+
+std::string lwpg::to_string(const std::vector<std::string> &array)
+{
+    std::string array_text = "{";
+
+    int i = 0;
+    for (const std::string &member : array)
+    {
+        if (i++ > 0)
+            array_text += ",";
+        array_text += lwpg::double_quote(member);
+    }
+
+    array_text += "}";
+
+    return array_text;
 }

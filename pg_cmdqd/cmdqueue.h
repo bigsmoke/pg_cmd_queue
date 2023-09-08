@@ -17,12 +17,16 @@ public:
     static const std::string SELECT_STMT;
 
     std::string queue_cmd_relname;
+
+    /*
+     * The local part of the queue's template table name.
+     */
     std::string queue_signature_class;
-    int queue_runner_euid;
-    int queue_runner_egid;
+
     std::optional<std::string> queue_runner_role;
     std::optional<std::string> queue_notify_channel;
     int queue_reselect_interval_msec;
+    std::string ansi_fg;
 
     CmdQueue() = default;
     CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;

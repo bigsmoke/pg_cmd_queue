@@ -12,6 +12,8 @@
 #include <thread>
 #include <map>
 
+#include "cmdqueue.h"
+
 /**
  * The log levels and their interpretations have been taken from PostgreSQL.
  * See “Message Severity Levels” in the Postgres documentation for details:
@@ -92,9 +94,13 @@ class Logger
     void writeLog();
 
 public:
+    thread_local static std::shared_ptr<CmdQueue> cmd_queue;
+
     static Logger *getInstance();
     void log(LogLevel level, const char *str, va_list args);
     void log(LogLevel level, const char *str, ...);
+    //void log(LogLevel level, const CmdQueue &cmd_queue, const char *str, va_list args);
+    //void log(LogLevel level, const CmdQueue &cmd_queue, const char *str, ...);
 
     void queueReOpen();
     void noLongerLogToStd();

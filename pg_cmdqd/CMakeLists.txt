@@ -15,16 +15,20 @@ add_executable(pg_cmd_queue_daemon
     lwpg_array.h lwpg_array.cpp
     lwpg_conn.h lwpg_conn.cpp
     lwpg_context.h lwpg_context.cpp
+    lwpg_error.h lwpg_error.cpp
     lwpg_hstore.h lwpg_hstore.cpp
     lwpg_nullable.h lwpg_nullable.cpp
     lwpg_result.h lwpg_result.cpp
     lwpg_result_iterator.h lwpg_result_iterator.cpp
     lwpg_results.h lwpg_results.cpp
+    lwpg_string.h lwpg_string.cpp
     fdguard.h fdguard.cpp
     pipefds.h pipefds.cpp
     cmdqueue.h cmdqueue.cpp
     cmdqueuerunner.h cmdqueuerunner.cpp
+    queuecmdmetadata.h queuecmdmetadata.cpp
     nixqueuecmd.h nixqueuecmd.cpp
+    sqlqueuecmd.h sqlqueuecmd.cpp
     pg_cmd_queue_daemon.cpp
 )
 

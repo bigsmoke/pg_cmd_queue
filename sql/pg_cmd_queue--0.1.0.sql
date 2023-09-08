@@ -56,6 +56,11 @@ which does not immediately need to support a high throughput, a view will
 often be the simplest.  See the [`test__pg_cmd_queue()`
 procedure](#procedure-test__pg_cmd_queue) for a full example.
 
+When creating your own `_queue_cmd` tables or views, you may add additional
+columns of your own, _after_ the columns that are specified by the
+`_<cmd_type>_queue_cmd_template` that you choose to use.  Note that your custom
+column names are _not_ allowed to start with `queue_` or `cmd_`.
+
 ## Running `pg_cmdqd` / `pg_command_queue_daemon`
 
 *nix commands executed by `pg_cmdqd`, are passed the following environment
@@ -63,11 +68,18 @@ variables:
 
   * the `PATH` with which `pg_cmdqd` was executed.
 
+## `pg_cmd_queue` settings
+
+| Setting name                          | Default setting  |
+| ------------------------------------- | ---------------- |
+| `pg_cmd_queue.notify_channel`         | `pgcmdq`         |
 
 ## Planned features for `pg_cmd_queue`
 
 * Helpers for setting up partitioning for table-based queues, to easily get rid
   of table bloat.
+* `pg_cron`'s `cron` schema compatibility, so that you can use `pg_cron` without
+  using `pg_cron`. 😉
 
 ## Features that will _not_ be part of `pg_cmd_queue`
 
@@ -79,6 +91,28 @@ variables:
   queues.  Again, this would be up to the implementor of a specific queue.
   If you want to use the generic `sql_queue_cmd` queue, just make sure that
   error handling logic is included in the `sql_cmd`.
+
+## Related/similar PostgreSQL programs and extensions
+
+* [`pgAgent`](https://www.pgadmin.org/docs/pgadmin4/latest/pgagent.html) is the
+   OG of Postgres task schedulers.  To add jobs from SQL is quite cumbersome,
+   though.  It really seems to be primarily designed for adding jobs via
+   pgAdmin, which the author of `pg_cmd_queue` personally doesn't dig much.
+   (He _much_ prefers `psql`.)
+
+* [`pg_cron`](https://github.com/citusdata/pg_cron) is a simpler, more Unixy
+  approach to the execution of periodic jobs than `pgAgent`.  In particular,
+  `pg_cron` has a friendlier SQL API for creating and managing cron jobs.
+
+* [`pgsidekick`](https://github.com/wttw/pgsidekick) is a collection of small
+  programs that _don't_ require the installation of a Postgres extensions.
+  Each of the little programs work by `LISTEN`ing to a specific `NOTIFY` channel
+  and doing something when a notification event is caught.
+
+* [`pqasyncnotifier`](https://github.com/twosigma/postgresql-contrib/blob/master/pqasyncnotifier.c)
+  is a single, simple `libpq` program that `LISTEN`s for `NOTIFY` events and
+  outputs them in a form that makes it easy to pipe them to `xargs` and do
+  something fun with a shell command.
 
 ## Extension object reference
 
@@ -252,16 +286,18 @@ create table cmd_queue (
                 array_upper(parse_ident(queue_signature_class::text), 1)
             ] in ('nix_queue_cmd_template', 'sql_queue_cmd_template')
         )
+    /*
     ,queue_runner_euid text
     ,queue_runner_egid text
+    */
     ,queue_runner_role name
     ,queue_notify_channel name
     ,queue_reselect_interval interval
         not null
         default '5 minutes'::interval
+    ,queue_reselect_randomized_every_nth int
+        check (queue_reselect_randomized_every_nth is null or queue_reselect_randomized_every_nth > 0)
     ,queue_cmd_timeout interval
-        not null
-        default '1 hour'::interval
     ,queue_wait_time_limit_warn interval
     ,queue_wait_time_limit_crit interval
     ,queue_created_at timestamptz
@@ -288,6 +324,7 @@ select pg_catalog.pg_extension_config_dump('cmd_queue', 'WHERE pg_extension_name
 
 --------------------------------------------------------------------------------------------------------------
 
+-- TODO: Check for illicit `queue_` or `cmd_`columns.
 create function cmd_queue__queue_signature_constraint()
     returns trigger
     set search_path from current
@@ -354,6 +391,95 @@ create constraint trigger queue_signature_constraint
     execute function cmd_queue__queue_signature_constraint();
 
 --------------------------------------------------------------------------------------------------------------
+
+create function cmd_queue__notify_daemon_of_changes()
+    returns trigger
+    set search_path from current
+    language plpgsql
+    as $$
+declare
+    _channel text := coalesce(nullif(current_setting('pg_cmd_queue.notify_channel', true), ''), 'pgcmdq');
+begin
+    assert tg_when = 'AFTER';
+    assert tg_op in ('INSERT', 'UPDATE', 'DELETE');
+    assert tg_level = 'ROW';
+    assert tg_table_schema = 'cmdq';
+    assert tg_table_name = 'cmd_queue';
+
+    if tg_op = 'INSERT' then
+        perform pg_notify(_channel, hstore('inserted queue', NEW.queue_cmd_class::text)::text);
+    elsif tg_op = 'UPDATE' then
+        perform pg_notify(_channel, hstore('updated queue', NEW.queue_cmd_class::text)::text);
+    elsif tg_op = 'DELETE' then
+        perform pg_notify(_channel, hstore('deleted queue', NEW.queue_cmd_class::text)::text);
+    end if;
+
+    return null;
+end;
+$$;
+
+create trigger notify_daemon_of_changes
+    after insert or update or delete
+    on cmd_queue
+    for each row
+    execute function cmd_queue__notify_daemon_of_changes();
+
+--------------------------------------------------------------------------------------------------------------
+
+create function queue_cmd_class_color(regclass)
+    returns table (
+        r int
+        ,g int
+        ,b int
+        ,hex text
+        ,ansi_fg text
+        ,ansi_bg text
+    )
+    immutable
+    leakproof
+    parallel safe
+begin atomic
+    with fqn as (
+        select
+            relnamespace::regnamespace::text || '.' || relname  as fully_qualified_name
+        from
+            pg_catalog.pg_class
+        where
+            oid = $1
+    )
+    ,hash as (
+        select
+            md5(fully_qualified_name) as queue_cmd_class_hash
+        from
+            fqn
+    )
+    ,rgb as (
+        select
+            ('x' || substring(md5(queue_cmd_class_hash), 1, 2))::bit(8)::int as r
+            ,('x' || substring(md5(queue_cmd_class_hash), 3, 2))::bit(8)::int as g
+            ,('x' || substring(md5(queue_cmd_class_hash), 5, 2))::bit(8)::int as b
+        from
+            hash
+    )
+    ,brighter as (
+        select
+            ((256 - 100) * (rgb.r/256.0) + 100)::int as r
+            ,((256 - 100) * (rgb.g/256.0) + 100)::int as g
+            ,((256 - 100) * (rgb.b/256.0) + 100)::int as b
+        from
+            rgb
+    )
+    select
+        rgb.*
+        ,to_hex(rgb.r) || to_hex(rgb.g) || to_hex(rgb.b) as hex
+        ,format(E'[38;2;%s;%s;%sm', rgb.r, rgb.g, rgb.b) as ansi_fg
+        ,format(E'[48;2;%s;%s;%sm', rgb.r, rgb.g, rgb.b) as ansi_bg
+    from
+        brighter as rgb
+    ;
+end;
+
+--------------------------------------------------------------------------------------------------------------
 -- `queue_cmd_template` table template and related objects                                                  --
 --------------------------------------------------------------------------------------------------------------
 
@@ -413,6 +539,22 @@ create trigger no_insert
     on queue_cmd_template
     for each row
     execute function queue_cmd_template__no_insert();
+
+--------------------------------------------------------------------------------------------------------------
+
+create function queue_cmd__ignore_update()
+    returns trigger
+    set search_path to pg_catalog
+    language plpgsql
+    as $$
+begin
+    assert tg_when in ('BEFORE', 'INSTEAD OF');
+    assert tg_op = 'UPDATE';
+    assert tg_level = 'ROW';
+
+    return null;
+end;
+$$;
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -545,6 +687,7 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
+-- TODO: Add _v1 suffix
 create table nix_queue_cmd_template (
     like queue_cmd_template
        including all
@@ -595,12 +738,87 @@ create trigger no_insert
 
 --------------------------------------------------------------------------------------------------------------
 
+create type sql_status_type as enum (
+    'PGRES_EMPTY_QUERY'
+    ,'PGRES_COMMAND_OK'
+    ,'PGRES_TUPLES_OK'
+    --,'PGRES_COPY_OUT'  -- irrelevant to pg_cmd_queue
+    --,'PGRES_COPY_IN'  -- irrelevant to pg_cmd_queue
+    ,'PGRES_BAD_RESPONSE'
+    --,'PGRES_NONFATAL_ERROR'  -- only relevant for notices
+    ,'PGRES_FATAL_ERROR'
+    --,'PGRES_COPY_BOTH'  -- irrelevant to pg_cmd_queue
+    --,'PGRES_SINGLE_TUPLE'  -- commented out, because we do not support single row mode
+    --,'PGRES_PIPELINE_SYNC'  -- pg_cmd_queue_daemon doesn't use libpq's pipeline mode
+    --,'PGRES_PIPELINE_ABORTED'  -- pg_cmd_queue_daemon doesn't use libpq's pipeline mode
+);
+
+comment on type sql_status_type is
+$md$The possible SQL command result statuses.
+
+[`PQresultStatus()`](https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQRESULTSTATUS)
+$md$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create type sql_errorish as (
+    pg_diag_severity text
+    ,pg_diag_severity_nonlocalized text
+    ,pg_diag_sqlstate text
+    ,pg_diag_message_primary text
+    ,pg_diag_message_detail text
+    ,pg_diag_message_hint text
+    ,pg_diag_statement_position text
+    ,pg_diag_internal_position text
+    ,pg_diag_internal_query text
+    ,pg_diag_context text
+    ,pg_diag_schema_name text
+    ,pg_diag_table_name text
+    ,pg_diag_column_name text
+    ,pg_diag_datatype_name text
+    ,pg_diag_constraint_name text
+    ,pg_diag_source_file text
+    ,pg_diag_source_line text
+    ,pg_diag_source_function text
+);
+
+comment on type sql_errorish is
+$md$
+
+The field names of this type are the lowercased version of the field codes from
+the documentation for libpq's
+[`PQresultErrorField()`](https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQRESULTERRORFIELD)
+function.
+$md$;
+
+--------------------------------------------------------------------------------------------------------------
+
+-- TODO: Add _v1 suffix
 create table sql_queue_cmd_template (
     like queue_cmd_template
        including all
     ,cmd_sql text
         not null
+    ,cmd_sql_result_status sql_status_type
+    ,cmd_sql_fatal_error sql_errorish
+    ,cmd_sql_nonfatal_errors sql_errorish[]
+    ,cmd_sql_result_rows jsonb
 );
+
+
+comment on column sql_queue_cmd_template.cmd_sql_result_rows is
+$md$The result rows represented as a JSON array of objects.
+
+When `cmd_sql` produced no rows, `cmd_sql` will contain either an SQL `NULL` or
+JSON `'null'` value.
+$md$;
+
+
+create trigger no_insert
+    before insert
+    on sql_queue_cmd_template
+    for each row
+    execute function queue_cmd_template__no_insert();
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -1206,5 +1424,170 @@ $out$;
     end if;
 end;
 $$;
+
+----------------------------------------------------------------------------------------------------------
+
+create procedure run_sql_cmd_queue(
+        queue_cmd_class$ regclass
+        ,max_iterations$ bigint default null
+        ,iterate_until_empty$ bool default true
+        ,queue_reselect_interval$ interval default null
+        ,commit_between_iterations$ bool default false
+    )
+    set search_path from current
+    language plpgsql
+    as $$
+declare
+    _old_role name;
+    _old_timeout_ms int;
+    _cmd_timeout_ms int;
+    _cmd_queue cmd_queue;
+    _cmd_start_time timestamptz;
+    _sql_queue_cmd record;
+    _sql_queue_cmd_count bigint;
+    _cmd_sql_result_status sql_status_type;
+    _cmd_sql_result_row record;
+    _cmd_sql_result_row_count bigint;
+    _cmd_sql_result_rows jsonb;
+    _cmd_sql_fatal_error sql_errorish;
+    _i int = 0;
+    _iteration_start_time timestamptz;
+    _queue_reselect_interval interval;
+begin
+    select q.* into _cmd_queue from cmd_queue as q where q.queue_cmd_class = queue_cmd_class$;
+
+    _queue_reselect_interval := coalesce(queue_reselect_interval$, _cmd_queue.queue_reselect_interval);
+
+    if _cmd_queue.queue_runner_role is not null then
+        _old_role := current_user;
+        execute format('SET LOCAL ROLE %I', _cmd_queue.queue_runner_role);
+    end if;
+
+    _old_timeout_ms := current_setting('statement_timeout')::int;
+    _cmd_timeout_ms := coalesce(
+        extract('epoch' from _cmd_queue.queue_cmd_timeout) * 1000
+        ,0  -- “A value of zero (the default) turns this off.”
+            -- And in `queue_cmd_timeout` this is expressed as `NULL`.
+    );
+    if _old_timeout_ms != _cmd_timeout_ms then
+        perform set_config(_cmd_timeout_ms, true);
+    end if;
+
+    <<main_loop>>
+    loop
+        _iteration_start_time := clock_timestamp();
+
+        execute format(
+            'SELECT * FROM %s ORDER BY cmd_queued_since LIMIT 1 FOR UPDATE'
+            ,_cmd_queue.queue_cmd_class
+        ) into _sql_queue_cmd;
+
+        -- “Note in particular that EXECUTE changes the output of GET DIAGNOSTICS,
+        -- but does not change FOUND.”
+        get current diagnostics _sql_queue_cmd_count = row_count;
+        if _sql_queue_cmd_count = 0 and iterate_until_empty$ then
+            exit main_loop;
+        end if;
+
+        _cmd_start_time := clock_timestamp();
+        _cmd_sql_result_status := null;
+
+        <<run_sql_cmd>>
+        begin
+            _cmd_sql_result_rows := null::jsonb;
+            for _cmd_sql_result_row in execute _sql_queue_cmd.cmd_sql loop
+                _cmd_sql_result_rows := coalesce(
+                    _cmd_sql_result_rows || to_jsonb(array[to_jsonb(_cmd_sql_result_row)])
+                    ,to_jsonb(array[to_jsonb(_cmd_sql_result_row)])
+                );
+            end loop;
+
+            -- “Note in particular that EXECUTE changes the output of GET DIAGNOSTICS,
+            -- but does not change FOUND.”
+            get current diagnostics _cmd_sql_result_row_count := row_count;
+
+            -- This detection is rather shit; a select which returns no rows should actually nevertheless
+            -- cause a PGRES_TUPLES_OK status rather than PGRES_COMMAND_OK.
+            if jsonb_array_length(_cmd_sql_result_rows) > 0 then
+                _cmd_sql_result_status := 'PGRES_TUPLES_OK';
+            else
+                _cmd_sql_result_status := 'PGRES_COMMAND_OK';
+            end if;
+        exception
+            when others then
+                _cmd_sql_result_status := 'PGRES_FATAL_ERROR';
+                get stacked diagnostics
+                    _cmd_sql_fatal_error.pg_diag_sqlstate = returned_sqlstate
+                    ,_cmd_sql_fatal_error.pg_diag_message_primary = message_text
+                    ,_cmd_sql_fatal_error.pg_diag_message_detail = pg_exception_detail
+                    ,_cmd_sql_fatal_error.pg_diag_message_hint = pg_exception_hint
+                    ,_cmd_sql_fatal_error.pg_diag_schema_name = schema_name
+                    ,_cmd_sql_fatal_error.pg_diag_table_name = table_name
+                    ,_cmd_sql_fatal_error.pg_diag_column_name = column_name
+                    ,_cmd_sql_fatal_error.pg_diag_datatype_name = pg_datatype_name
+                    ,_cmd_sql_fatal_error.pg_diag_constraint_name = constraint_name
+                    ,_cmd_sql_fatal_error.pg_diag_context = pg_exception_context
+                ;
+                _cmd_sql_fatal_error.pg_diag_severity := 'EXCEPTION';
+                _cmd_sql_fatal_error.pg_diag_severity_nonlocalized := 'EXCEPTION';
+        end run_sql_cmd;
+
+        execute format(
+            $sql$
+UPDATE
+    %s
+SET
+    cmd_runtime = tstzrange(%L, %L)
+    ,cmd_sql_result_status = %L
+    ,cmd_sql_fatal_error = %L
+    ,cmd_sql_result_rows = %L
+WHERE
+    cmd_id = %L
+    AND cmd_subid IS NOT DISTINCT FROM %s
+$sql$
+            ,_cmd_queue.queue_cmd_class
+            ,_cmd_start_time, clock_timestamp()
+            ,_cmd_sql_result_status
+            ,_cmd_sql_fatal_error
+            ,_cmd_sql_result_rows
+            ,_sql_queue_cmd.cmd_id
+            ,coalesce(quote_literal(_sql_queue_cmd.cmd_subid), 'NULL')
+        );
+
+        -- Normally, `COMMIT AND CHAIN` would be what we want, but not while testing, because we may be
+        -- within a PL/pgSQL exception handler (used to easily rollback a `pg_pure_tests` test case its
+        -- state).
+        if commit_between_iterations$ then
+            commit and chain;
+        end if;
+
+        _i := _i + 1;
+        if max_iterations$ is not null and _i = max_iterations$ then
+            exit main_loop;
+        end if;
+
+        if _sql_queue_cmd_count = 0 and _queue_reselect_interval is not null then
+            perform pg_sleep(
+                extract('epoch' from _iteration_start_time + _queue_reselect_interval - clock_timestamp())
+            );
+        end if;
+    end loop main_loop;
+
+    if _cmd_queue.queue_runner_role is not null then
+        execute format('SET LOCAL ROLE %I', _old_role);
+    end if;
+
+    if _old_timeout_ms != _cmd_timeout_ms then
+        perform set_config(_old_timeout_ms, true);
+    end if;
+end;
+$$;
+
+comment on procedure run_sql_cmd_queue is
+$md$Run the commands from the given SQL command queue, mostly like the `pg_cmd_queue_daemon` would.
+
+Unlike the `pg_cmd_queue_daemon`, this function cannot capture non-fatal errors
+(like notices and warnings).  This is due to a limitation in PL/pgSQL.
+$md$;
 
 ----------------------------------------------------------------------------------------------------------

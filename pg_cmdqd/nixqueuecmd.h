@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -11,26 +12,22 @@
 #include "lwpg_nullable.h"
 #include "lwpg_result.h"
 #include "cmdqueue.h"
-
-using time_stamp = std::chrono::time_point<std::chrono::system_clock,
-                                           std::chrono::microseconds>;
+#include "queuecmdmetadata.h"
 
 class NixQueueCmd
 {
-    static const std::string SELECT_STMT_WITHOUT_RELNAME;
-    static const std::string UPDATE_STMT_WITHOUT_RELNAME;
     Logger *logger = Logger::getInstance();
 
-public:
-    std::string queue_cmd_class;
-    std::string queue_cmd_relname;
-    std::string cmd_id;
-    std::optional<std::string> cmd_subid;
+    static const std::string SELECT_STMT_WITHOUT_RELNAME;
+    static const std::string UPDATE_STMT_WITHOUT_RELNAME;
 
-    // PostgreSQL's has a `to_timestamp(double) function which expects the subsecond digits as the decimal part.
-    double cmd_queued_since;
-    double cmd_runtime_start;
-    double cmd_runtime_end;
+    bool _is_valid = false;
+
+    std::string cmd_line() const;
+    bool cmd_succeeded() const;
+
+public:
+    QueueCmdMetadata meta;
 
     std::vector<std::string> cmd_argv;
     std::unordered_map<std::string, std::string> cmd_env;
@@ -40,19 +37,14 @@ public:
     std::string cmd_stdout = "";
     std::string cmd_stderr = "";
 
-    bool _is_valid = false;
-
-    NixQueueCmd() = default;
     NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
-    bool is_valid() const;
+    ~NixQueueCmd();
 
     static std::string select_stmt(const CmdQueue &cmd_queue);
-    std::string update_stmt(const CmdQueue &cmd_queue) const;
-    std::vector<std::optional<std::string>> update_params() const;
+    static std::string update_stmt(const CmdQueue &cmd_queue);
+    std::vector<std::optional<std::string>> update_params();
 
-    std::string cmd_line() const;
-    bool cmd_succeeded() const;
-    void run_cmd();
+    void run_cmd(std::shared_ptr<lwpg::Conn> &conn);
 };
 
 #endif // NIXQUEUECMD_H

@@ -20,3 +20,11 @@ std::optional<std::string> lwpg::to_nullable_string(const std::optional<int>& or
 
     return std::to_string(orig.value());
 }
+
+std::optional<std::string> lwpg::to_nullable_string(const char *c_str)
+{
+    if (c_str == nullptr)
+        return {};
+
+    return std::string(c_str);
+}

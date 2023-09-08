@@ -12,10 +12,13 @@
 #include <postgresql/libpq-fe.h>
 
 #include "logger.h"
+#include "lwpg_array.h"
 #include "lwpg_context.h"
 #include "lwpg_results.h"
 #include "cmdqueue.h"
 #include "cmdqueuerunner.h"
+#include "nixqueuecmd.h"
+#include "sqlqueuecmd.h"
 #include "utils.h"
 
 void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
@@ -34,6 +37,7 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << std::endl
         << "Options:" << std::endl
         << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
+        << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated." << std::endl
         << std::endl;
 }
 
@@ -56,6 +60,8 @@ int main(int argc, char **argv)
     Logger *logger = Logger::getInstance();
     logger->setLogLevel(LOG_INFO);
 
+    std::vector<std::string> explicit_queue_cmd_classes;
+
     std::string conn_str;
     try
     {
@@ -73,6 +79,12 @@ int main(int argc, char **argv)
                 if (StringToLogLevel.count(argv[++i]) == 0)
                     throw CmdLineParseError(std::string("Unrecognized log level: ") + argv[i]);
                 logger->setLogLevel( StringToLogLevel.at(argv[i]) );
+            }
+            else if (std::string(argv[i]) == "--cmd-queue")
+            {
+                if (i == argc-1)
+                    throw CmdLineParseError("Missing \x1b[1m<queue_cmd_class>\x1b[22m argument to \x1b[1m--cmd-queue\x1b[22m option.");
+                explicit_queue_cmd_classes.emplace_back(argv[++i]);
             }
             else if (i == argc - 1)
             {
@@ -104,8 +116,12 @@ int main(int argc, char **argv)
         PQdb(conn->get()), PQhost(conn->get()), PQport(conn->get()), PQuser(conn->get())
     );
 
-    lwpg::Results<CmdQueue> cmd_queue_results = pg.query<CmdQueue>(CmdQueue::SELECT_STMT);
-    std::unordered_map<std::string, CmdQueueRunner> cmd_queue_runners;
+    lwpg::Results<CmdQueue> cmd_queue_results = pg.query<CmdQueue>(CmdQueue::SELECT_STMT, {
+        lwpg::to_string(explicit_queue_cmd_classes)
+    });
+
+    std::unordered_map<std::string, CmdQueueRunner<NixQueueCmd>> nix_cmd_queue_runners;
+    std::unordered_map<std::string, CmdQueueRunner<SqlQueueCmd>> sql_cmd_queue_runners;
 
     for (CmdQueue cmd_queue : cmd_queue_results)
     {
@@ -115,20 +131,38 @@ int main(int argc, char **argv)
             continue;
         }
 
-        cmd_queue_runners.emplace(
-            std::piecewise_construct,
-            std::forward_as_tuple(cmd_queue.queue_cmd_relname),
-            std::forward_as_tuple(cmd_queue, conn_str)
-        );
-    }
-
-    for (auto &it : cmd_queue_runners)
-    {
-        if (it.second.thread.joinable())
+        if (cmd_queue.queue_signature_class == "nix_queue_cmd_template")
         {
-            it.second.thread.join();
+            nix_cmd_queue_runners.emplace(
+                std::piecewise_construct,
+                std::forward_as_tuple(cmd_queue.queue_cmd_relname),
+                std::forward_as_tuple(cmd_queue, conn_str)
+            );
+        }
+        else if (cmd_queue.queue_signature_class == "sql_queue_cmd_template")
+        {
+            sql_cmd_queue_runners.emplace(
+                std::piecewise_construct,
+                std::forward_as_tuple(cmd_queue.queue_cmd_relname),
+                std::forward_as_tuple(cmd_queue, conn_str)
+            );
+        }
+        else
+        {
+            logger->log(
+                LOG_ERROR,
+                "Command queue \x1b[1m%s\x1b[22m has unrecognized template type: \x1b[1m%s\x1b[22m",
+                cmd_queue.queue_cmd_relname.c_str(), cmd_queue.queue_signature_class.c_str()
+            );
         }
     }
+
+    for (auto &it : nix_cmd_queue_runners)
+        if (it.second.thread.joinable())
+            it.second.thread.join();
+    for (auto &it : sql_cmd_queue_runners)
+        if (it.second.thread.joinable())
+            it.second.thread.join();
 
     return 0;
 }

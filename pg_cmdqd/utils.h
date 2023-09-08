@@ -4,6 +4,7 @@
 #include <string.h>
 #include <errno.h>
 
+#include <optional>
 #include <string>
 
 template<typename T> int check(int rc)

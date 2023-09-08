@@ -1,7 +1,7 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-08-01 15:09:57.425409+01
+pg_readme_generated_at: 2023-09-02 18:42:29.724253+01
 pg_readme_version: 0.6.4
 ---
 
@@ -67,6 +67,8 @@ variables:
 
 * Helpers for setting up partitioning for table-based queues, to easily get rid
   of table bloat.
+* `pg_cron`'s `cron` schema compatibility, so that you can use `pg_cron` without
+  using `pg_cron`. 😉
 
 ## Features that will _not_ be part of `pg_cmd_queue`
 
@@ -78,6 +80,28 @@ variables:
   queues.  Again, this would be up to the implementor of a specific queue.
   If you want to use the generic `sql_queue_cmd` queue, just make sure that
   error handling logic is included in the `sql_cmd`.
+
+## Related/similar PostgreSQL programs and extensions
+
+* [`pgAgent`](https://www.pgadmin.org/docs/pgadmin4/latest/pgagent.html) is the
+   OG of Postgres task schedulers.  To add jobs from SQL is quite cumbersome,
+   though.  It really seems to be primarily designed for adding jobs via
+   pgAdmin, which the author of `pg_cmd_queue` personally doesn't dig much.
+   (He _much_ prefers `psql`.)
+
+* [`pg_cron`](https://github.com/citusdata/pg_cron) is a simpler, more Unixy
+  approach to the execution of periodic jobs than `pgAgent`.  In particular,
+  `pg_cron` has a friendlier SQL API for creating and managing cron jobs.
+
+* [`pgsidekick`](https://github.com/wttw/pgsidekick) is a collection of small
+  programs that _don't_ require the installation of a Postgres extensions.
+  Each of the little programs work by `LISTEN`ing to a specific `NOTIFY` channel
+  and doing something when a notification event is caught.
+
+* [`pqasyncnotifier`](https://github.com/twosigma/postgresql-contrib/blob/master/pqasyncnotifier.c)
+  is a single, simple `libpq` program that `LISTEN`s for `NOTIFY` events and
+  outputs them in a form that makes it easy to pipe them to `xargs` and do
+  something fun with a shell command.
 
 ## Extension object reference
 
@@ -93,7 +117,7 @@ There are 5 tables that directly belong to the `pg_cmd_queue` extension.
 
 Every table or view which holds individual queue commands has to be registered as a record in this table.
 
-The `cmd_queue` table has 11 attributes:
+The `cmd_queue` table has 12 attributes:
 
 1. `cmd_queue.queue_cmd_class` `regclass`
 
@@ -121,16 +145,18 @@ The `cmd_queue` table has 11 attributes:
    - `NOT NULL`
    - `DEFAULT '00:05:00'::interval`
 
-8. `cmd_queue.queue_wait_time_limit_warn` `interval`
+8. `cmd_queue.queue_cmd_timeout` `interval`
 
-9. `cmd_queue.queue_wait_time_limit_crit` `interval`
+9. `cmd_queue.queue_wait_time_limit_warn` `interval`
 
-10. `cmd_queue.queue_created_at` `timestamp with time zone`
+10. `cmd_queue.queue_wait_time_limit_crit` `interval`
+
+11. `cmd_queue.queue_created_at` `timestamp with time zone`
 
    - `NOT NULL`
    - `DEFAULT now()`
 
-11. `cmd_queue.pg_extension_name` `text`
+12. `cmd_queue.pg_extension_name` `text`
 
 #### Table: `queue_cmd_template`
 
@@ -167,7 +193,7 @@ The `queue_cmd_template` table has 5 attributes:
 
 #### Table: `nix_queue_cmd_template`
 
-The `nix_queue_cmd_template` table has 11 attributes:
+The `nix_queue_cmd_template` table has 12 attributes:
 
 1. `nix_queue_cmd_template.queue_cmd_class` `regclass`
 
@@ -208,11 +234,24 @@ The `nix_queue_cmd_template` table has 11 attributes:
 
 8. `nix_queue_cmd_template.cmd_stdin` `bytea`
 
-9. `nix_queue_cmd_template.cmd_exit_code` `smallint`
+9. `nix_queue_cmd_template.cmd_exit_code` `integer`
 
-10. `nix_queue_cmd_template.cmd_stdout` `bytea`
+10. `nix_queue_cmd_template.cmd_term_sig` `integer`
 
-11. `nix_queue_cmd_template.cmd_stderr` `bytea`
+   If the command exited abnormally, this field should hold the signal with which it exited.
+
+   In Unixy systems, a command exits either:
+     (a) with an exit code, _or_
+     (b) with a termination signal.
+
+   Though not all *nix signals are standardized across different Unix variants,
+   termination signals _are_ part of POSIX; see
+   [Wikipedia](https://en.wikipedia.org/wiki/Signal_(IPC)#Default_action) and
+   [GNU](https://www.gnu.org/software/libc/manual/html_node/Termination-Signals.html).
+
+11. `nix_queue_cmd_template.cmd_stdout` `bytea`
+
+12. `nix_queue_cmd_template.cmd_stderr` `bytea`
 
 #### Table: `sql_queue_cmd_template`
 
@@ -371,6 +410,20 @@ Function-local settings:
 
   *  `SET search_path TO pg_catalog`
 
+#### Procedure: `run_sql_cmd_queue (regclass, bigint, interval)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `queue_cmd_class$`                                                | `regclass`                                                           |  |
+|   `$2` |       `IN` | `iterations$`                                                     | `bigint`                                                             | `1` |
+|   `$3` |       `IN` | `queue_reselect_interval$`                                        | `interval`                                                           | `NULL::interval` |
+
+Procedure-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+
 #### Procedure: `test_dump_restore__pg_cmd_queue (text)`
 
 Procedure arguments:
@@ -523,6 +576,160 @@ end;
 $procedure$
 ```
 
+#### Procedure: `test_integration__pg_cmdqd (text)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `test_stage$`                                                     | `text`                                                               |  |
+
+Procedure-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET plpgsql.check_asserts TO true`
+
+```sql
+CREATE OR REPLACE PROCEDURE cmdq.test_integration__pg_cmdqd(IN "test_stage$" text)
+ LANGUAGE plpgsql
+ SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET "plpgsql.check_asserts" TO 'true'
+AS $procedure$
+declare
+    _cmd record;
+    _cmd_id text;
+    _wait_start timestamptz;
+begin
+    assert test_stage$ in ('init', 'run', 'clean');
+
+    if test_stage$ = 'init' then
+        create table tst1_nix_cmd (
+            like nix_queue_cmd_template
+                including all
+        );
+        alter table tst1_nix_cmd
+            alter column queue_cmd_class set default 'tst1_nix_cmd';
+
+        insert into cmd_queue (
+            queue_cmd_class
+            ,queue_signature_class
+            ,queue_runner_role
+            ,queue_notify_channel
+            ,queue_reselect_interval
+            ,queue_cmd_timeout
+        )
+        values (
+            'tst1_nix_cmd'
+            ,'nix_queue_cmd_template'
+            ,'cmdq_test_role'
+            ,'tst1_nix_cmd'
+            ,'0 seconds'::interval  -- Let the daemon's epoll() loop go without pause
+            ,'1 second'::interval
+        );
+
+    elsif test_stage$ = 'run' then
+        insert into tst1_nix_cmd (
+            cmd_id
+            ,cmd_argv
+            ,cmd_env
+            ,cmd_stdin
+        )
+        values (
+            'cmd-with-clean-exit'
+            ,array[
+                'pg_cmdq_test_cmd'
+                ,'--stdout-line'
+                ,'This line should be sent to STDOUT.'
+                ,'--stderr-line'
+                ,'This line is to be sent to STDERR.'
+                ,'--echo-stdin'
+                ,'--stdout-line'
+                ,'This line should be printed after the echoed STDIN.'
+                ,'--echo-env-var'
+                ,'PG_CMDQ_TST_VAR1'
+                ,'--stdout-line'
+                ,'This line should be squeezed between 2 env. variables.'
+                ,'--echo-env-var'
+                ,'PG_CMDQ_TST_VAR2'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,'PG_CMDQ_TST_VAR1=>var1_value",PG_CMDQ_TST_VAR2=>"var2: with => signs, \ and \""'::hstore
+            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+        )
+        returning cmd_id into _cmd_id
+        ;
+
+        _wait_start := clock_timestamp();
+        <<wait>>
+        loop
+            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
+            exit when found;
+            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
+                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
+            end if;
+            pg_sleep(0.001);  -- seconds
+        end loop;
+
+        assert _cmd.cmd_stdout = $out$This line should be sent to STDOUT.
+This STDIN should be echoed to STDOUT,
+including this 2nd line.
+This line should be printed after the echoed STDIN.
+var1_value
+This line should be squeezed between 2 env. variables.
+var2: with => signs, \ and "
+$out$;
+        assert _cmd.cmd_stderr = E'This line is to be sent to STDERR.\n';
+        assert _cmd.cmd_exit_code = 0;
+        assert _cmd.cmd_term_sig is null;
+
+        insert into tst1_nix_cmd (
+            cmd_id
+            ,cmd_argv
+            ,cmd_env
+            ,cmd_stdin
+        )
+        values (
+            'cmd-exceeds-timeout'
+            ,array[
+                'pg_cmdq_test_cmd'
+                ,'--stdout-line'
+                ,'Line 1.'
+                ,'--sleep'
+                ,'10 seconds'::interval
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
+            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+        )
+        returning cmd_id into _cmd_id
+        ;
+
+        _wait_start := clock_timestamp();
+        <<wait>>
+        loop
+            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
+            exit when found;
+            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
+                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
+            end if;
+            pg_sleep(0.001);  -- seconds
+        end loop;
+
+        assert _cmd.cmd_stdout = E'Line 1.\n';
+        assert _cmd.cmd_stderr = '';
+        assert _cmd.cmd_exit_code is null;
+        assert _cmd.cmd_term_sig = 9, format('%s ≠ 9 (SIGKILL)', _cmd.cmd_term_sig);
+
+    elsif test_stage$ = 'clean' then
+        drop table tst1_nix_cmd cascade;
+        delete from cmd_queue where queue_cmd_class = 'tst1_nix_cmd';
+    end if;
+end;
+$procedure$
+```
+
 #### Procedure: `test__pg_cmd_queue()`
 
 Procedure-local settings:
@@ -598,7 +805,8 @@ begin
             'WOBBIE_SMTP_HOST', '127.0.0.1'
         ) as cmd_env
         ,to_json(u.*)::text::bytea as cmd_stdin
-        ,null::smallint as cmd_exit_code
+        ,null::int as cmd_exit_code
+        ,null::int as cmd_term_sig
         ,null::bytea as cmd_stdout
         ,null::bytea as cmd_stderrr  -- One r too many.
     from
@@ -695,7 +903,8 @@ begin
             'WOBBIE_SMTP_HOST', '127.0.0.1'
         ) as cmd_env
         ,to_json(u.*)::text::bytea as cmd_stdin
-        ,null::smallint as cmd_exit_code
+        ,null::int as cmd_exit_code
+        ,null::int as cmd_term_sig
         ,null::bytea as cmd_stdout
         ,null::bytea as cmd_stderr
     from

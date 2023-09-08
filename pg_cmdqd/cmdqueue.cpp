@@ -15,13 +15,16 @@ const std::string CmdQueue::SELECT_STMT = R"SQL(
         ,(parse_ident(queue_signature_class::regclass::text))[
             array_upper(parse_ident(queue_signature_class::regclass::text), 1)
         ] as queue_signature_class
-        ,queue_runner_euid
-        ,queue_runner_egid
         ,queue_runner_role::text
         ,queue_notify_channel
         ,extract('epoch' from queue_reselect_interval) * 10^3 as queue_reselect_interval_msec
+        ,color.ansi_fg
     FROM
         cmdq.cmd_queue
+    CROSS JOIN LATERAL
+        cmdq.queue_cmd_class_color(queue_cmd_class) as color
+    WHERE
+        NULLIF($1, '{}'::text[]) IS NULL OR queue_cmd_class = ANY ($1::regclass[])
 )SQL";
 
 /**
@@ -37,24 +40,14 @@ CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::un
         queue_cmd_relname = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_relname"));
         queue_signature_class = PQgetvalue(result->get(), row, fieldMapping.at("queue_signature_class"));
 
-        if (not PQgetisnull(result->get(), row, fieldMapping.at("queue_runner_euid")))
-        {
-            std::string queue_runner_euid = PQgetvalue(result->get(), row, fieldMapping.at("queue_runner_euid"));
-            this->queue_runner_euid = std::stoi(queue_runner_euid);
-        }
-
-        if (not PQgetisnull(result->get(), row, fieldMapping.at("queue_runner_egid")))
-        {
-            std::string queue_runner_egid = PQgetvalue(result->get(), row, fieldMapping.at("queue_runner_egid"));
-            this->queue_runner_egid = std::stoi(queue_runner_egid);
-        }
-
         queue_runner_role = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_runner_role"));
 
         queue_notify_channel = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_notify_channel"));
 
         std::string queue_reselect_interval_msec = PQgetvalue(result->get(), row, fieldMapping.at("queue_reselect_interval_msec"));
         this->queue_reselect_interval_msec = std::stoi(queue_reselect_interval_msec);
+
+        ansi_fg = PQgetvalue(result->get(), row, fieldMapping.at("ansi_fg"));
 
         _is_valid = true;
     }

@@ -1,11 +1,11 @@
 CMAKE_BUILD_TYPES := Release Debug
-DEFAULT_CMAKE_BUILD_TYPE := Release
+CMAKE_BUILD_TYPE := Release
 EXECUTABLE_NAME := pg_cmd_queue_daemon
 
 executable_targets := $(CMAKE_BUILD_TYPES:%=%/$(EXECUTABLE_NAME))
 makefile_targets := $(CMAKE_BUILD_TYPES:%=%/Makefile)
 
-.DEFAULT_GOAL := $(DEFAULT_CMAKE_BUILD_TYPE)/$(EXECUTABLE_NAME)
+.DEFAULT_GOAL := $(CMAKE_BUILD_TYPE)/$(EXECUTABLE_NAME)
 
 all: $(executable_targets)
 
@@ -20,5 +20,10 @@ $(makefile_targets): CMakeLists.txt *.cpp *.h
 .PHONY: clean
 clean:
 	rm -rf $(CMAKE_BUILD_TYPES)
+
+.PHONY: target_executable_path
+.SILENT: target_executable_path
+target_executable_path:
+	echo $(abspath $(CURDIR)/$(CMAKE_BUILD_TYPE)/$(EXECUTABLE_NAME))
 
 # vim: set noexpandtab tabstop=4 shiftwidth=4:

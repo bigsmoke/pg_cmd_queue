@@ -1,6 +1,7 @@
 #include "sqlqueuecmd.h"
 
 #include <functional>
+#include <regex>
 
 #include "libpq-fe.h"
 
@@ -68,6 +69,8 @@ std::vector<std::optional<std::string>> SqlQueueCmd::update_params()
 SqlQueueCmd::SqlQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
     : meta(result, row, fieldMapping)
 {
+    static std::regex leading_and_trailing_whitespace("^[\n\t ]+|[\n\t ]+$");
+
     if (not meta.is_valid()) {
         _is_valid = false;
     }
@@ -77,6 +80,7 @@ SqlQueueCmd::SqlQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const s
         if (PQgetisnull(result->get(), row, fieldMapping.at("cmd_sql")))
             throw std::domain_error("`cmd_sql` should never be `NULL`.");
         this->cmd_sql = PQgetvalue(result->get(), row, fieldMapping.at("cmd_sql"));
+        this->cmd_sql = std::regex_replace(this->cmd_sql, leading_and_trailing_whitespace, "");
     }
     catch (std::exception &ex)
     {

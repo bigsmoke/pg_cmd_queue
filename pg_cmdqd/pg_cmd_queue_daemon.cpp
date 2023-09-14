@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -55,6 +56,19 @@ public:
     }
 };
 
+class CmdEnvParseError : std::exception
+{
+    std::string _message;
+public:
+    CmdEnvParseError(const std::string &msg)
+        : _message(msg) {}
+
+    const char *what() const noexcept override
+    {
+        return _message.data();
+    }
+};
+
 int main(int argc, char **argv)
 {
     Logger *logger = Logger::getInstance();
@@ -63,6 +77,24 @@ int main(int argc, char **argv)
     std::vector<std::string> explicit_queue_cmd_classes;
 
     std::string conn_str;
+
+    try
+    {
+        if (std::getenv("PG_CMDQD_LOG_LEVEL") != nullptr)
+        {
+            std::string log_level_from_env = std::getenv("PG_CMDQD_LOG_LEVEL");
+            if (StringToLogLevel.count(log_level_from_env) == 0)
+                throw CmdLineParseError(std::string("Unrecognized log level: ") + log_level_from_env);
+            logger->setLogLevel(StringToLogLevel.at(log_level_from_env));
+        }
+    }
+    catch (const CmdEnvParseError &err)
+    {
+        std::cerr << "\x1b[31m" << err.what() << "\x1b[0m" << std::endl;
+        pg_cmdqd_usage(argv[0], std::cerr);
+        exit(2);
+    }
+
     try
     {
         for (int i = 1; i < argc; i++)
@@ -105,7 +137,7 @@ int main(int argc, char **argv)
     if (!conn_str.empty())
         logger->log(LOG_INFO, "Connecting to database: \x1b[1m%s\x1b[0m", conn_str.c_str());
     else
-        logger->log(LOG_INFO, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[0m environment variables…");
+        logger->log(LOG_DEBUG1, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[0m environment variables…");
 
     lwpg::Context pg;
     std::shared_ptr<lwpg::Conn> conn = pg.connectdb(conn_str);

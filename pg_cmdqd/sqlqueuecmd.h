@@ -22,7 +22,6 @@ class SqlQueueCmd
     static void receive_notice_c_wrapper(void *arg, const PGresult *res);
     void receive_notice(const PGresult *res);
 
-    bool _cmd_has_failed = false;
     lwpg::Error handle_sql_fatality(std::shared_ptr<lwpg::Result> &result);
 
 public:

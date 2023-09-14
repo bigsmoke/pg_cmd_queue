@@ -297,6 +297,8 @@ create table cmd_queue (
         default '5 minutes'::interval
     ,queue_reselect_randomized_every_nth int
         check (queue_reselect_randomized_every_nth is null or queue_reselect_randomized_every_nth > 0)
+    ,queue_select_timeout interval
+        default '10 seconds'::interval
     ,queue_cmd_timeout interval
     ,queue_wait_time_limit_warn interval
     ,queue_wait_time_limit_crit interval
@@ -564,36 +566,58 @@ create function queue_cmd__notify()
     language plpgsql
     as $$
 declare
-    _queue_notify_channel name;
-    _cmd_id_field name := 'cmd_id';
-    _cmd_subid_field name := 'cmd_subid';
+    _queue_notify_channel name := coalesce(
+        nullif(current_setting('pg_cmd_queue.notify_channel', true), '')
+        ,'pgcmdq'
+    );
+    _queue_cmd_relname name := tg_table_name;
+    _cmd_id_expression name := '(cmd_id)::text';
+    _cmd_subid_expression name := '(cmd_subid)::text';
     _cmd_id text;
     _cmd_subid text;
 begin
     assert tg_when = 'AFTER';
     assert tg_op in ('INSERT', 'UPDATE', 'DELETE');
     assert tg_level = 'ROW';
-    assert tg_nargs in (1, 3);
+    assert tg_table_schema = 'cmdq' and tg_nargs in (0, 1)
+           or tg_table_name != 'cmdq' and tg_nargs between 0 and 4;
 
-    _queue_notify_channel := tg_argv[0];
-    if tg_nargs = 3 then
-        _cmd_id_field := tg_argv[1];
-        _cmd_subid_field := nullif(tg_argv[2], 'null');
+    if tg_nargs > 0 then
+        _queue_notify_channel := coalesce(nullif(upper(tg_argv[0]), 'DEFAULT'), _queue_notify_channel);
+    end if;
+    if tg_nargs > 1 then
+        _queue_cmd_relname := coalesce(nullif(upper(tg_argv[1]), 'DEFAULT'), _queue_cmd_relname);
+    end if;
+    if tg_nargs > 2 then
+        _cmd_id_expression := case
+            when upper(tg_argv[2]) = 'DEFAULT' then
+                '(cmd_id)::text'
+            when tg_argv[2] ~ '^\(.*\)::text$' then
+                regexp_replace(tg_argv[2], '(?:OLD|NEW)\.', '($1).')
+            else
+                '($1).' || quote_ident(tg_argv[2])
+        end;
+    end if;
+    if tg_nargs > 3 then
+        _cmd_subid_expression := case
+            when upper(tg_argv[3]) = 'DEFAULT' then
+                '(cmd_subid)::text'
+            when tg_argv[3] ~ '^\(.*\)::text$' then
+                regexp_replace(tg_argv[3], '(?:OLD|NEW)\.', '($1).')
+            else
+                '($1).' || quote_ident(tg_argv[3])
+        end;
     end if;
 
-    if tg_op in ('INSERT', 'UPDATE') then
-        execute format('SELECT (($1).%I)::text', _cmd_id_field) using NEW into _cmd_id;
-        if _cmd_subid_field is not null then
-            execute format('SELECT (($1).%I)::text', _cmd_subid_field) using NEW into _cmd_subid;
-        end if;
-    elsif tg_op = 'DELETE' then
-        execute format('SELECT (($1).%I)::text', _cmd_id_field) using OLD into _cmd_id;
-        if _cmd_subid_field is not null then
-            execute format('SELECT (($1).%I)::text', _cmd_subid_field) using OLD into _cmd_subid;
-        end if;
+    if tg_op = 'INSERT' then
+        execute 'SELECT ' || _cmd_id_expression using NEW into _cmd_id;
+        execute 'SELECT ' || _cmd_subid_expression using NEW into _cmd_subid;
+    elsif tg_op in ('UPDATE', 'DELETE') then
+        execute 'SELECT ' || _cmd_id_expression using OLD into _cmd_id;
+        execute 'SELECT ' || _cmd_subid_expression using OLD into _cmd_subid;
     end if;
 
-    perform pg_notify(_queue_notify_channel, row(_cmd_id, _cmd_subid)::text);
+    perform pg_notify(_queue_notify_channel, row(_queue_cmd_relname, _cmd_id, _cmd_subid)::text);
 
     return null;
 end;
@@ -604,7 +628,12 @@ $md$Use this trigger function for easily triggering `NOTIFY` events from a queue
 
 When using a table to hold a queue's commands, you can hook this trigger
 function directly to an `ON INSERT` trigger on the `queue_cmd_template`-derived
-table itself.  In that case, the only argument that this trigger function needs
+table itself.  In that case, the trigger needs no arguments.  The notifications
+will be sent on the channel configured in the extension-global
+[`pg_cmd_queue.notify_channel`](#pg_cmd_queue-settings) setting. If that is so
+desired, you can keep
+
+the only argument that this trigger function needs
 is the `NOTIFY` channel name (which should be identical to the channel name in
 the `cmd_queue.queue_notify_channel` column.
 
@@ -614,6 +643,25 @@ additional arguments: ① the name of the field which will be mapped to `cmd_id`
 in the view; and the name of the field which will be mapped to
 `cmd_subid` in the view.  If there is no `cmd_subid`, this third parameter
 should be `null`.
+
+When the trigger is created on a table or view in the `cmdq` schema, only one
+parameter is accepted, because the signature for
+
+| No. | Trigger param           | Default         | Example values                                    |
+| --- | ----------------------- | --------------- | ------------------------------------------------- |
+|  1. | `queue_notify_channel`  | `TG_TABLE_NAME` | `'my_notify_channel'`                             |
+|  2. | `queue_cmd_relname`     | `TG_TABLE_NAME` | `'my_cmd'`                                        |
+|  3. | `cmd_id_source`         | `'cmd_id'`      | `'field'`, `'(NEW.field || ''-suffix'')::text'`   |
+|  4. | `cmd_subid_source`      | `'cmd_subid'`   | `'field'`, `'NULL'`, `'(''invoice_mail'')::text'` |
+
+1. The first argument (`queue_notify_channel`) defaults to the name of the
+   relationship to which the trigger is attached.
+2. The second argument (`queue_cmd_relname`) also defaults to the name of the
+   relationship to which the trigger is attached.  In case that the trigger is
+   created on the _underlying table_ for a _view_ in the `cmdq` schema,
+3. The third argument (`cmd_id_source`) defaults to `'cmd_id'`, which is
+   probably what you want
+
 $md$;
 
 --------------------------------------------------------------------------------------------------------------
@@ -687,7 +735,6 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
--- TODO: Add _v1 suffix
 create table nix_queue_cmd_template (
     like queue_cmd_template
        including all
@@ -1433,6 +1480,7 @@ create procedure run_sql_cmd_queue(
         ,iterate_until_empty$ bool default true
         ,queue_reselect_interval$ interval default null
         ,commit_between_iterations$ bool default false
+        ,lock_rows_for_update$ bool default true
     )
     set search_path from current
     language plpgsql
@@ -1441,6 +1489,7 @@ declare
     _old_role name;
     _old_timeout_ms int;
     _cmd_timeout_ms int;
+    _select_timeout_ms int;
     _cmd_queue cmd_queue;
     _cmd_start_time timestamptz;
     _sql_queue_cmd record;
@@ -1469,31 +1518,37 @@ begin
         ,0  -- “A value of zero (the default) turns this off.”
             -- And in `queue_cmd_timeout` this is expressed as `NULL`.
     );
-    if _old_timeout_ms != _cmd_timeout_ms then
-        perform set_config(_cmd_timeout_ms, true);
-    end if;
+    _select_timeout_ms := coalesce(
+        extract('epoch' from _cmd_queue.queue_select_timeout) * 1000
+        ,0  -- “A value of zero (the default) turns this off.”
+            -- And in `queue_cmd_timeout` this is expressed as `NULL`.
+    );
 
     <<main_loop>>
     loop
         _iteration_start_time := clock_timestamp();
 
+        perform set_config('statement_timeout', _select_timeout_ms::text, true);
         execute format(
-            'SELECT * FROM %s ORDER BY cmd_queued_since LIMIT 1 FOR UPDATE'
+            'SELECT * FROM %s ORDER BY cmd_queued_since LIMIT 1 %s'
             ,_cmd_queue.queue_cmd_class
+            ,case when lock_rows_for_update$ then 'FOR UPDATE SKIP LOCKED' else '' end
         ) into _sql_queue_cmd;
 
         -- “Note in particular that EXECUTE changes the output of GET DIAGNOSTICS,
         -- but does not change FOUND.”
         get current diagnostics _sql_queue_cmd_count = row_count;
-        if _sql_queue_cmd_count = 0 and iterate_until_empty$ then
-            exit main_loop;
-        end if;
+        exit main_loop when _sql_queue_cmd_count = 0 and iterate_until_empty$;
 
         _cmd_start_time := clock_timestamp();
         _cmd_sql_result_status := null;
 
         <<run_sql_cmd>>
         begin
+            perform set_config('statement_timeout', _cmd_timeout_ms::text, true);
+            raise debug using
+                message = format('Executing %s', _cmd_queue.queue_cmd_class)
+                ,detail = jsonb_pretty(to_jsonb(_sql_queue_cmd)):
             _cmd_sql_result_rows := null::jsonb;
             for _cmd_sql_result_row in execute _sql_queue_cmd.cmd_sql loop
                 _cmd_sql_result_rows := coalesce(
@@ -1530,6 +1585,10 @@ begin
                 ;
                 _cmd_sql_fatal_error.pg_diag_severity := 'EXCEPTION';
                 _cmd_sql_fatal_error.pg_diag_severity_nonlocalized := 'EXCEPTION';
+
+                raise debug using
+                    message = format('%s failed', _cmd_queue.queue_cmd_class::regclass::text)
+                    ,detail = jsonb_pretty(to_jsonb(_cmd_sql_fatal_error))::text;
         end run_sql_cmd;
 
         execute format(
@@ -1577,9 +1636,7 @@ $sql$
         execute format('SET LOCAL ROLE %I', _old_role);
     end if;
 
-    if _old_timeout_ms != _cmd_timeout_ms then
-        perform set_config(_old_timeout_ms, true);
-    end if;
+    perform set_config('statement_timeout', _old_timeout_ms::text, true);
 end;
 $$;
 
@@ -1589,5 +1646,22 @@ $md$Run the commands from the given SQL command queue, mostly like the `pg_cmd_q
 Unlike the `pg_cmd_queue_daemon`, this function cannot capture non-fatal errors
 (like notices and warnings).  This is due to a limitation in PL/pgSQL.
 $md$;
+
+----------------------------------------------------------------------------------------------------------
+
+/*
+create function mock_run_nix_queue_cmd(inout nix_queue_cmd_template)
+    language plpgsql
+    as $$
+begin
+    if ($1).cmd_id is null then
+        execute format(
+            'SELECT c.* FROM %s'
+            ,($1).queue_cmd_class
+        ) into $1;
+    end if;
+end;
+$$;
+*/
 
 ----------------------------------------------------------------------------------------------------------

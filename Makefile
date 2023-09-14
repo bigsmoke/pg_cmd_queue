@@ -1,10 +1,19 @@
 EXTENSION = pg_cmd_queue
 
+PG_CMDQD_DIR = $(CURDIR)/pg_cmdqd
+PG_CMDQD_BUILD_TYPE ?= Release
+PG_CMDQD_BIN = $(PG_CMDQD_BUILD_TYPE)/pg_cmd_queue_daemon
+
 DISTVERSION = $(shell sed -n -E "/default_version/ s/^.*'(.*)'.*$$/\1/p" $(EXTENSION).control)
 
 DATA = $(wildcard sql/$(EXTENSION)--*.sql)
 
 REGRESS = test_extension_update_paths
+
+# `pg_cmd_queue_daemon` is not a script, but when we call it a `PROGRAM_built`, PGXS wants to play with its
+# object files—a task which we want to leave up to the CMake (wrapped by a GNU Makefile) in the daemon's
+# subdirectory.
+SCRIPTS_built = $(PG_CMDQD_DIR)/$(PG_CMDQD_BIN)
 
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
@@ -32,3 +41,14 @@ test_dump_restore: $(CURDIR)/bin/test_dump_restore.sh sql/test_dump_restore.sql
 		--psql-script-file sql/test_dump_restore.sql \
 		--out-file results/test_dump_restore.out \
 		--expected-out-file expected/test_dump_restore.out
+
+.PHONY: $(PG_CMDQD_DIR)/$(PG_CMDQD_BIN)
+$(PG_CMDQD_DIR)/$(PG_CMDQD_BIN): export CMAKE_BUILD_TYPE=$(PG_CMDQD_BUILD_TYPE)
+$(PG_CMDQD_DIR)/$(PG_CMDQD_BIN):
+	$(MAKE) -C $(PG_CMDQD_DIR) $(PG_CMDQD_BIN)
+
+# Latch the daemon's cleaning chores onto PGXS its factory-default `clean`ing target.
+clean: cmdqd-clean
+.PHONY: cmdqd-clean
+cmdqd-clean:
+	$(MAKE) -C $(PG_CMDQD_DIR) clean

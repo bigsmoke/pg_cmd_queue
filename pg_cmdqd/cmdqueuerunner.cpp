@@ -34,12 +34,19 @@ void CmdQueueRunner<T>::_run()
     struct epoll_event events[MAX_PG_EPOLL_EVENTS];
     memset(&events, 0, sizeof (struct epoll_event)*MAX_PG_EPOLL_EVENTS);
 
-    logger->log(LOG_INFO, "Connecting to database…");
+    if (not _conn_str.empty())
+        logger->log(LOG_INFO, "Connecting to database: \x1b[1m%s\x1b[22m", _conn_str.c_str());
+    else
+        logger->log(LOG_DEBUG1, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[22m environment variables…");
 
     lwpg::Context pg;
     std::shared_ptr<lwpg::Conn> conn = pg.connectdb(_conn_str);
 
-    // TODO: Log session characteristics
+    logger->log(
+        LOG_INFO,
+        "DB connection established to \x1b[1m%s\x1b[22m on \x1b[1m%s:%s\x1b[22m as \x1b[1m%s\x1b[22m",
+        PQdb(conn->get()), PQhost(conn->get()), PQport(conn->get()), PQuser(conn->get())
+    );
 
     pg.exec("SET search_path TO cmdq");
 
@@ -65,7 +72,18 @@ void CmdQueueRunner<T>::_run()
     while (this->_keep_running)
     {
         logger->log(LOG_DEBUG3, "Checking for item in queue…");
-        std::optional<T> potential_queue_cmd = pg.query1<T>(T::select_stmt(_cmd_queue));
+
+        std::optional<T> potential_queue_cmd;
+        try
+        {
+            potential_queue_cmd = pg.query1<T>(T::select_stmt(_cmd_queue));
+        }
+        catch (const std::runtime_error &err)
+        {
+            logger->log(LOG_ERROR, "Retrieving command from queue failed: %s", err.what());
+            pg.exec("ROLLBACK TRANSACTION AND CHAIN");
+        }
+
         if (potential_queue_cmd.has_value())
         {
             T queue_cmd = std::move(potential_queue_cmd.value());

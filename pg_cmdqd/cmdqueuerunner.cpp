@@ -6,7 +6,7 @@
 #include <stdexcept>
 
 #include <errno.h>
-#include <sys/epoll.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include "utils.h"
@@ -30,10 +30,6 @@ void CmdQueueRunner<T>::_run()
 {
     Logger::cmd_queue = std::make_shared<CmdQueue>(_cmd_queue);
 
-    // From `man 2 epoll_create`: “the size argument is ignored but must be greater than zero”
-    int epoll_fd = check<std::runtime_error>(epoll_create(69));
-    struct epoll_event events[MAX_PG_EPOLL_EVENTS];
-    memset(&events, 0, sizeof (struct epoll_event)*MAX_PG_EPOLL_EVENTS);
 
     if (not _conn_str.empty())
         logger->log(LOG_INFO, "Connecting to database: \x1b[1m%s\x1b[22m", _conn_str.c_str());
@@ -66,7 +62,9 @@ void CmdQueueRunner<T>::_run()
 
     // TODO: LISTEN if NOTIFY channel has been specified
 
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pg.socket(), events);  // TODO: Check with Wiebe
+    struct pollfd fds[] = {
+        { pg.socket(), POLLIN | POLLPRI | POLLOUT | POLLERR, 0 }
+    };
 
     pg.exec("BEGIN TRANSACTION");
 
@@ -106,7 +104,7 @@ void CmdQueueRunner<T>::_run()
             }
         }
 
-        int fd_count = epoll_wait(epoll_fd, events, MAX_PG_EPOLL_EVENTS, _cmd_queue.queue_reselect_interval_msec);
+        int fd_count = poll(fds, 1, _cmd_queue.queue_reselect_interval_msec);
         if (fd_count < 0)
         {
             if (errno == EINTR)
@@ -117,8 +115,6 @@ void CmdQueueRunner<T>::_run()
     }
 
     pg.exec("ROLLBACK TRANSACTION");
-
-    close(epoll_fd);  // TODO: Ask Wiebe: should this not go in the destructor somehow to guarantee `close()`?
 }
 
 template <typename T>

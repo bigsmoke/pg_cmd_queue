@@ -8,7 +8,6 @@
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/epoll.h>
 
 #include <libpq-fe.h>
 

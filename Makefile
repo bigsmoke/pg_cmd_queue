@@ -47,6 +47,11 @@ $(PG_CMDQD_DIR)/$(PG_CMDQD_BIN): export CMAKE_BUILD_TYPE=$(PG_CMDQD_BUILD_TYPE)
 $(PG_CMDQD_DIR)/$(PG_CMDQD_BIN):
 	$(MAKE) -C $(PG_CMDQD_DIR) $(PG_CMDQD_BIN)
 
+.PHONY: cmdqd_target_executable_path
+.SILENT: cmdqd_target_executable_path
+cmdqd_target_executable_path:
+	echo $(abspath $(CURDIR)/$(PG_CMDQD_DIR)/$(PG_CMDQD_BIN))
+
 # Latch the daemon's cleaning chores onto PGXS its factory-default `clean`ing target.
 clean: cmdqd-clean
 .PHONY: cmdqd-clean

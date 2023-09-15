@@ -33,4 +33,8 @@ public:
 template class CmdQueueRunner<NixQueueCmd>;
 template class CmdQueueRunner<SqlQueueCmd>;
 
+// Strictly speaking, the above template “speciation” declarations should allow the below to be in
+// a regular .cpp file, but for some reason this blew up on Macos.
+#include "cmdqueuerunner.tpp"
+
 #endif // CMDQUEUERUNNER_H

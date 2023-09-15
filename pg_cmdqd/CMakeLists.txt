@@ -25,7 +25,7 @@ add_executable(pg_cmd_queue_daemon
     fdguard.h fdguard.cpp
     pipefds.h pipefds.cpp
     cmdqueue.h cmdqueue.cpp
-    cmdqueuerunner.h cmdqueuerunner.cpp
+    cmdqueuerunner.h
     queuecmdmetadata.h queuecmdmetadata.cpp
     nixqueuecmd.h nixqueuecmd.cpp
     sqlqueuecmd.h sqlqueuecmd.cpp

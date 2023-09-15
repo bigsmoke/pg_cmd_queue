@@ -50,7 +50,7 @@ Logger::Logger()
     auto f = std::bind(&Logger::writeLog, this);
     this->writerThread = std::thread(f, this);
 
-#ifndef __linux__
+#ifdef __linux__
     pthread_t native = this->writerThread.native_handle();
     pthread_setname_np(native, "LogWriter");
 #endif

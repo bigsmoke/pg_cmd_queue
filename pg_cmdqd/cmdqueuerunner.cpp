@@ -5,6 +5,7 @@
 #include <memory>
 #include <stdexcept>
 
+#include <errno.h>
 #include <sys/epoll.h>
 #include <unistd.h>
 

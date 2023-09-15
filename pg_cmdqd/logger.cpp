@@ -10,6 +10,8 @@ Shamelessly copied/adapted from FlashMQ (https://www.flashmq.org)
 #include <string.h>
 #include <functional>
 
+#include <errno.h>
+
 #include "utils.h"
 
 LogLine::LogLine(std::string &&line, bool alsoToStdOut) :

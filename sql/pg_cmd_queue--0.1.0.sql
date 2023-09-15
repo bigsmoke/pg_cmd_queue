@@ -326,7 +326,6 @@ select pg_catalog.pg_extension_config_dump('cmd_queue', 'WHERE pg_extension_name
 
 --------------------------------------------------------------------------------------------------------------
 
--- TODO: Check for illicit `queue_` or `cmd_`columns.
 create function cmd_queue__queue_signature_constraint()
     returns trigger
     set search_path from current
@@ -334,6 +333,7 @@ create function cmd_queue__queue_signature_constraint()
     as $$
 declare
     _queue_rel_attrs text[];
+    _extra_attr name;
     _signature_attrs text[];
     _signature_attr_count int;
 begin
@@ -381,6 +381,19 @@ begin
                 ,'sql_queue_cmd_template'::regclass
             );
     end if;
+
+    foreach _extra_attr in array _queue_rel_attrs[(_signature_attr_count+1):] loop
+        if _extra_attr like 'queue__' then
+            raise integrity_constraint_violation using
+                message = '`queue_` is a reserved prefix and not allowed in your own custom/extra columns.'
+                ,detail = format('Illegal custom column name: `%I`', _extra_attr);
+        end if;
+        if _extra_attr like 'cmd__' then
+            raise integrity_constraint_violation using
+                message = '`cmd_` is a reserved prefix and not allowed in your own custom/extra columns.'
+                ,detail = format('Illegal custom column name: `%I`', _extra_attr);
+        end if;
+    end loop;
 
     return null;
 end;

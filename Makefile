@@ -50,7 +50,7 @@ $(PG_CMDQD_DIR)/$(PG_CMDQD_BIN):
 .PHONY: cmdqd_target_executable_path
 .SILENT: cmdqd_target_executable_path
 cmdqd_target_executable_path:
-	echo $(abspath $(CURDIR)/$(PG_CMDQD_DIR)/$(PG_CMDQD_BIN))
+	echo $(abspath $(PG_CMDQD_DIR)/$(PG_CMDQD_BIN))
 
 # Latch the daemon's cleaning chores onto PGXS its factory-default `clean`ing target.
 clean: cmdqd-clean

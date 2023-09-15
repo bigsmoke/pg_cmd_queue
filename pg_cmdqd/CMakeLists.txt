@@ -33,4 +33,5 @@ add_executable(pg_cmd_queue_daemon
 )
 
 target_include_directories(pg_cmd_queue_daemon PUBLIC ${LIBPQ_INCLUDE_DIRS})
-target_link_libraries(pg_cmd_queue_daemon pthread pq ${LIBPQ_LIBRARY_DIRS})
+target_link_libraries(pg_cmd_queue_daemon pthread ${LIBPQ_LINK_LIBRARIES})
+link_directories(pg_cmd_queue_daemon ${LIBPQ_LIBRARY_DIRS})

@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <memory>
 
-#include "postgresql/libpq-fe.h"
+#include <libpq-fe.h>
 
 namespace lwpg
 {

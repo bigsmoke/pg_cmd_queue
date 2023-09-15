@@ -1,7 +1,7 @@
 #include "lwpg_error.h"
 
-#include "libpq-fe.h"
-#include "postgres_ext.h"
+#include <libpq-fe.h>
+#include <postgres_ext.h>
 
 #include "lwpg_array.h"
 #include "lwpg_nullable.h"

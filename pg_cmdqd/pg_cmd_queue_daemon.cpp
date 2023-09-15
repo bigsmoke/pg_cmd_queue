@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <sys/epoll.h>
 
-#include <postgresql/libpq-fe.h>
+#include <libpq-fe.h>
 
 #include "logger.h"
 #include "lwpg_array.h"

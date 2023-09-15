@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "postgresql/libpq-fe.h"
+#include <libpq-fe.h>
 
 #include "logger.h"
 #include "lwpg_conn.h"

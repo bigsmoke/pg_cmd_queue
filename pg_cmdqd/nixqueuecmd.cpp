@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/types.h>
@@ -202,23 +203,14 @@ void NixQueueCmd::run_cmd(std::shared_ptr<lwpg::Conn> &conn)
             argv_heads.push_back(const_cast<char*>(s.c_str()));
         argv_heads[argv_heads.size()-1] = nullptr;
         char **c_argv = argv_heads.data();
-        // We don't have to worry about cleaning up c_argv, because execvpe will clear up all that.
+        // We don't have to worry about cleaning up c_argv, because execvp() will clear up all that.
 
-        std::vector<std::string> env_flat;
-        env_flat.reserve(this->cmd_env.size());
         for (const std::pair<const std::string, std::string> &var : this->cmd_env)
-            env_flat.push_back(var.first + "=" + var.second);
-        std::vector<char *> envp_heads;
-        envp_heads.reserve(this->cmd_env.size() + 1);
-        for (const std::string &s : env_flat)
-            envp_heads.push_back(const_cast<char*>(s.c_str()));
-        envp_heads[envp_heads.size()-1] = nullptr;
-        char **c_envp = envp_heads.data();
-        // We don't have to worry about cleaning up c_envp, because execvpe will clear up all that.
+            setenv(var.first.c_str(), var.second.c_str(), 1);
 
-        execvpe(this->cmd_argv[0].c_str(), c_argv, c_envp);
+        execvp(this->cmd_argv[0].c_str(), c_argv);
 
-        // We only get here if the call to `execvpe()` fails.
+        // We only get here if the call to `execvp()` fails.
         std::cerr << strerror(errno) << std::endl;
         exit(127);  // Same as when bash can't find a command.
     }

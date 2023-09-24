@@ -24,3 +24,4 @@ PGresult *lwpg::Result::get()
 {
     return this->result;
 }
+

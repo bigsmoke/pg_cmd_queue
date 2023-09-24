@@ -1,7 +1,7 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-09-02 18:42:29.724253+01
+pg_readme_generated_at: 2023-09-21 20:15:31.073847+01
 pg_readme_version: 0.6.4
 ---
 
@@ -56,12 +56,23 @@ which does not immediately need to support a high throughput, a view will
 often be the simplest.  See the [`test__pg_cmd_queue()`
 procedure](#procedure-test__pg_cmd_queue) for a full example.
 
+When creating your own `_queue_cmd` tables or views, you may add additional
+columns of your own, _after_ the columns that are specified by the
+`_<cmd_type>_queue_cmd_template` that you choose to use.  Note that your custom
+column names are _not_ allowed to start with `queue_` or `cmd_`.
+
 ## Running `pg_cmdqd` / `pg_command_queue_daemon`
 
 *nix commands executed by `pg_cmdqd`, are passed the following environment
 variables:
 
   * the `PATH` with which `pg_cmdqd` was executed.
+
+## `pg_cmd_queue` settings
+
+| Setting name                          | Default setting  |
+| ------------------------------------- | ---------------- |
+| `pg_cmd_queue.notify_channel`         | `pgcmdq`         |
 
 ## Planned features for `pg_cmd_queue`
 
@@ -130,20 +141,24 @@ The `cmd_queue` table has 12 attributes:
    - `NOT NULL`
    - `CHECK ((parse_ident(queue_signature_class::text))[array_upper(parse_ident(queue_signature_class::text), 1)] = ANY (ARRAY['nix_queue_cmd_template'::text, 'sql_queue_cmd_template'::text]))`
 
-3. `cmd_queue.queue_runner_euid` `text`
-
-4. `cmd_queue.queue_runner_egid` `text`
-
-5. `cmd_queue.queue_runner_role` `name`
+3. `cmd_queue.queue_runner_role` `name`
 
    This is the role as which the queue runner should select from the queue and run update commands.
 
-6. `cmd_queue.queue_notify_channel` `name`
+4. `cmd_queue.queue_notify_channel` `name`
 
-7. `cmd_queue.queue_reselect_interval` `interval`
+5. `cmd_queue.queue_reselect_interval` `interval`
 
    - `NOT NULL`
    - `DEFAULT '00:05:00'::interval`
+
+6. `cmd_queue.queue_reselect_randomized_every_nth` `integer`
+
+   - `CHECK (queue_reselect_randomized_every_nth IS NULL OR queue_reselect_randomized_every_nth > 0)`
+
+7. `cmd_queue.queue_select_timeout` `interval`
+
+   - `DEFAULT '00:00:10'::interval`
 
 8. `cmd_queue.queue_cmd_timeout` `interval`
 
@@ -255,7 +270,7 @@ The `nix_queue_cmd_template` table has 12 attributes:
 
 #### Table: `sql_queue_cmd_template`
 
-The `sql_queue_cmd_template` table has 6 attributes:
+The `sql_queue_cmd_template` table has 10 attributes:
 
 1. `sql_queue_cmd_template.queue_cmd_class` `regclass`
 
@@ -288,6 +303,19 @@ The `sql_queue_cmd_template` table has 6 attributes:
 6. `sql_queue_cmd_template.cmd_sql` `text`
 
    - `NOT NULL`
+
+7. `sql_queue_cmd_template.cmd_sql_result_status` `sql_status_type`
+
+8. `sql_queue_cmd_template.cmd_sql_fatal_error` `sql_errorish`
+
+9. `sql_queue_cmd_template.cmd_sql_nonfatal_errors` `sql_errorish[]`
+
+10. `sql_queue_cmd_template.cmd_sql_result_rows` `jsonb`
+
+   The result rows represented as a JSON array of objects.
+
+   When `cmd_sql` produced no rows, `cmd_sql` will contain either an SQL `NULL` or
+   JSON `'null'` value.
 
 #### Table: `http_queue_cmd_template`
 
@@ -325,6 +353,14 @@ The `http_queue_cmd_template` table has 12 attributes:
 
 ### Routines
 
+#### Function: `cmd_queue__notify_daemon_of_changes()`
+
+Function return type: `trigger`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+
 #### Function: `cmd_queue__queue_signature_constraint()`
 
 Function return type: `trigger`
@@ -351,6 +387,12 @@ Function-local settings:
 
   *  `SET search_path TO cmdq, public, pg_temp`
 
+#### Function: `pg_cmd_queue_notify_channel()`
+
+Function return type: `text`
+
+Function attributes: `STABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
 #### Function: `pg_cmd_queue_readme()`
 
 This function utilizes the `pg_readme` extension to generate a thorough README for this extension, based on the `pg_catalog` and the `COMMENT` objects found therein.
@@ -362,6 +404,24 @@ Function-local settings:
   *  `SET search_path TO cmdq, public, pg_temp`
   *  `SET pg_readme.include_view_definitions TO true`
   *  `SET pg_readme.include_routine_definitions_like TO {test__%}`
+
+#### Function: `queue_cmd_class_color (regclass)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | ``                                                                | `regclass`                                                           |  |
+|   `$2` |    `TABLE` | `r`                                                               | `integer`                                                            |  |
+|   `$3` |    `TABLE` | `g`                                                               | `integer`                                                            |  |
+|   `$4` |    `TABLE` | `b`                                                               | `integer`                                                            |  |
+|   `$5` |    `TABLE` | `hex`                                                             | `text`                                                               |  |
+|   `$6` |    `TABLE` | `ansi_fg`                                                         | `text`                                                               |  |
+|   `$7` |    `TABLE` | `ansi_bg`                                                         | `text`                                                               |  |
+
+Function return type: `TABLE(r integer, g integer, b integer, hex text, ansi_fg text, ansi_bg text)`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`, ROWS 1000
 
 #### Function: `queue_cmd__delete_after_update()`
 
@@ -377,7 +437,17 @@ arguments: ① the name of the field which will be mapped to `cmd_id` in the vie
 and the name of the field which will be mapped to `cmd_subid` in the view.  If
 there is no `cmd_subid`, this third parameter should be `null`.
 
+**Note** that this function is as of yet untested!
+
 Function return type: `trigger`
+
+#### Function: `queue_cmd__ignore_update()`
+
+Function return type: `trigger`
+
+Function-local settings:
+
+  *  `SET search_path TO pg_catalog`
 
 #### Function: `queue_cmd__notify()`
 
@@ -385,16 +455,41 @@ Use this trigger function for easily triggering `NOTIFY` events from a queue's (
 
 When using a table to hold a queue's commands, you can hook this trigger
 function directly to an `ON INSERT` trigger on the `queue_cmd_template`-derived
-table itself.  In that case, the only argument that this trigger function needs
-is the `NOTIFY` channel name (which should be identical to the channel name in
-the `cmd_queue.queue_notify_channel` column.
+table itself.  In that case, the trigger needs no arguments.  The notifications
+will be sent on the channel configured in the extension-global
+[`pg_cmd_queue.notify_channel`](#pg_cmd_queue-settings) setting. If that is so
+desired, you can keep
+
+The only argument that this trigger function absolutely requires is the
+`NOTIFY` channel name (which should be identical to the channel name in the
+`cmd_queue.queue_notify_channel` column.  In case that the trigger is attached
+to a table or view in the `cmdq` schema with the relation's name ending in
+`_cmd`, that is also the only _allowed_ argument.
 
 When the `queue_cmd_template`-derived relation is a view, this trigger function
-will have to be attached to the underlying table and will require two
+will have to be attached to the underlying table and will require three
 additional arguments: ① the name of the field which will be mapped to `cmd_id`
 in the view; and the name of the field which will be mapped to
 `cmd_subid` in the view.  If there is no `cmd_subid`, this third parameter
 should be `null`.
+
+When the trigger is created on a table or view in the `cmdq` schema, only one
+parameter is accepted, because the signature for
+
+| No. | Trigger param           | Default         | Example values                                    |
+| --- | ----------------------- | --------------- | ------------------------------------------------- |
+|  1. | `queue_notify_channel`  | `TG_TABLE_NAME` | `'my_notify_channel'`                             |
+|  2. | `queue_cmd_relname`     | `TG_TABLE_NAME` | `'my_cmd'`                                        |
+|  3. | `cmd_id_source`         | `'cmd_id'`      | `'field'`, `'(NEW.field || ''-suffix'')::text'`   |
+|  4. | `cmd_subid_source`      | `'cmd_subid'`   | `'field'`, `'NULL'`, `'(''invoice_mail'')::text'` |
+
+1. The first argument (`queue_notify_channel`) defaults to the name of the
+   relationship to which the trigger is attached.
+2. The second argument (`queue_cmd_relname`) also defaults to the name of the
+   relationship to which the trigger is attached.  In case that the trigger is
+   created on the _underlying table_ for a _view_ in the `cmdq` schema,
+3. The third argument (`cmd_id_source`) defaults to `'cmd_id'`, which is
+   probably what you want
 
 Function return type: `trigger`
 
@@ -410,15 +505,23 @@ Function-local settings:
 
   *  `SET search_path TO pg_catalog`
 
-#### Procedure: `run_sql_cmd_queue (regclass, bigint, interval)`
+#### Procedure: `run_sql_cmd_queue (regclass, bigint, boolean, interval, boolean, boolean)`
+
+Run the commands from the given SQL command queue, mostly like the `pg_cmd_queue_daemon` would.
+
+Unlike the `pg_cmd_queue_daemon`, this function cannot capture non-fatal errors
+(like notices and warnings).  This is due to a limitation in PL/pgSQL.
 
 Procedure arguments:
 
 | Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
 |   `$1` |       `IN` | `queue_cmd_class$`                                                | `regclass`                                                           |  |
-|   `$2` |       `IN` | `iterations$`                                                     | `bigint`                                                             | `1` |
-|   `$3` |       `IN` | `queue_reselect_interval$`                                        | `interval`                                                           | `NULL::interval` |
+|   `$2` |       `IN` | `max_iterations$`                                                 | `bigint`                                                             | `NULL::bigint` |
+|   `$3` |       `IN` | `iterate_until_empty$`                                            | `boolean`                                                            | `true` |
+|   `$4` |       `IN` | `queue_reselect_interval$`                                        | `interval`                                                           | `NULL::interval` |
+|   `$5` |       `IN` | `commit_between_iterations$`                                      | `boolean`                                                            | `false` |
+|   `$6` |       `IN` | `lock_rows_for_update$`                                           | `boolean`                                                            | `true` |
 
 Procedure-local settings:
 
@@ -571,160 +674,6 @@ begin
 
     elsif test_stage$ = 'post-restore' then
         assert (select count(*) from cmdq.cmd_queue) = 1;
-    end if;
-end;
-$procedure$
-```
-
-#### Procedure: `test_integration__pg_cmdqd (text)`
-
-Procedure arguments:
-
-| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
-| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
-|   `$1` |       `IN` | `test_stage$`                                                     | `text`                                                               |  |
-
-Procedure-local settings:
-
-  *  `SET search_path TO cmdq, public, pg_temp`
-  *  `SET plpgsql.check_asserts TO true`
-
-```sql
-CREATE OR REPLACE PROCEDURE cmdq.test_integration__pg_cmdqd(IN "test_stage$" text)
- LANGUAGE plpgsql
- SET search_path TO 'cmdq', 'public', 'pg_temp'
- SET "plpgsql.check_asserts" TO 'true'
-AS $procedure$
-declare
-    _cmd record;
-    _cmd_id text;
-    _wait_start timestamptz;
-begin
-    assert test_stage$ in ('init', 'run', 'clean');
-
-    if test_stage$ = 'init' then
-        create table tst1_nix_cmd (
-            like nix_queue_cmd_template
-                including all
-        );
-        alter table tst1_nix_cmd
-            alter column queue_cmd_class set default 'tst1_nix_cmd';
-
-        insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
-            ,queue_runner_role
-            ,queue_notify_channel
-            ,queue_reselect_interval
-            ,queue_cmd_timeout
-        )
-        values (
-            'tst1_nix_cmd'
-            ,'nix_queue_cmd_template'
-            ,'cmdq_test_role'
-            ,'tst1_nix_cmd'
-            ,'0 seconds'::interval  -- Let the daemon's epoll() loop go without pause
-            ,'1 second'::interval
-        );
-
-    elsif test_stage$ = 'run' then
-        insert into tst1_nix_cmd (
-            cmd_id
-            ,cmd_argv
-            ,cmd_env
-            ,cmd_stdin
-        )
-        values (
-            'cmd-with-clean-exit'
-            ,array[
-                'pg_cmdq_test_cmd'
-                ,'--stdout-line'
-                ,'This line should be sent to STDOUT.'
-                ,'--stderr-line'
-                ,'This line is to be sent to STDERR.'
-                ,'--echo-stdin'
-                ,'--stdout-line'
-                ,'This line should be printed after the echoed STDIN.'
-                ,'--echo-env-var'
-                ,'PG_CMDQ_TST_VAR1'
-                ,'--stdout-line'
-                ,'This line should be squeezed between 2 env. variables.'
-                ,'--echo-env-var'
-                ,'PG_CMDQ_TST_VAR2'
-                ,'--exit-code'
-                ,'0'
-            ]
-            ,'PG_CMDQ_TST_VAR1=>var1_value",PG_CMDQ_TST_VAR2=>"var2: with => signs, \ and \""'::hstore
-            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
-        )
-        returning cmd_id into _cmd_id
-        ;
-
-        _wait_start := clock_timestamp();
-        <<wait>>
-        loop
-            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
-            exit when found;
-            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
-                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
-            end if;
-            pg_sleep(0.001);  -- seconds
-        end loop;
-
-        assert _cmd.cmd_stdout = $out$This line should be sent to STDOUT.
-This STDIN should be echoed to STDOUT,
-including this 2nd line.
-This line should be printed after the echoed STDIN.
-var1_value
-This line should be squeezed between 2 env. variables.
-var2: with => signs, \ and "
-$out$;
-        assert _cmd.cmd_stderr = E'This line is to be sent to STDERR.\n';
-        assert _cmd.cmd_exit_code = 0;
-        assert _cmd.cmd_term_sig is null;
-
-        insert into tst1_nix_cmd (
-            cmd_id
-            ,cmd_argv
-            ,cmd_env
-            ,cmd_stdin
-        )
-        values (
-            'cmd-exceeds-timeout'
-            ,array[
-                'pg_cmdq_test_cmd'
-                ,'--stdout-line'
-                ,'Line 1.'
-                ,'--sleep'
-                ,'10 seconds'::interval
-                ,'--exit-code'
-                ,'0'
-            ]
-            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
-            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
-        )
-        returning cmd_id into _cmd_id
-        ;
-
-        _wait_start := clock_timestamp();
-        <<wait>>
-        loop
-            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
-            exit when found;
-            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
-                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
-            end if;
-            pg_sleep(0.001);  -- seconds
-        end loop;
-
-        assert _cmd.cmd_stdout = E'Line 1.\n';
-        assert _cmd.cmd_stderr = '';
-        assert _cmd.cmd_exit_code is null;
-        assert _cmd.cmd_term_sig = 9, format('%s ≠ 9 (SIGKILL)', _cmd.cmd_term_sig);
-
-    elsif test_stage$ = 'clean' then
-        drop table tst1_nix_cmd cascade;
-        delete from cmd_queue where queue_cmd_class = 'tst1_nix_cmd';
     end if;
 end;
 $procedure$
@@ -1047,6 +996,56 @@ exception
     when transaction_rollback then
 end;
 $procedure$
+```
+
+### Types
+
+The following extra types have been defined _besides_ the implicit composite types of the [tables](#tables) and [views](#views) in this extension.
+
+#### Enum type: `sql_status_type`
+
+The possible SQL command result statuses.
+
+[`PQresultStatus()`](https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQRESULTSTATUS)
+
+```sql
+CREATE TYPE sql_status_type AS ENUM (
+    'PGRES_EMPTY_QUERY',
+    'PGRES_COMMAND_OK',
+    'PGRES_TUPLES_OK',
+    'PGRES_BAD_RESPONSE',
+    'PGRES_FATAL_ERROR'
+);
+```
+
+#### Composite type: `sql_errorish`
+
+The field names of this type are the lowercased version of the field codes from
+the documentation for libpq's
+[`PQresultErrorField()`](https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQRESULTERRORFIELD)
+function.
+
+```sql
+CREATE TYPE sql_errorish AS (
+  pg_diag_severity text,
+  pg_diag_severity_nonlocalized text,
+  pg_diag_sqlstate text,
+  pg_diag_message_primary text,
+  pg_diag_message_detail text,
+  pg_diag_message_hint text,
+  pg_diag_statement_position text,
+  pg_diag_internal_position text,
+  pg_diag_internal_query text,
+  pg_diag_context text,
+  pg_diag_schema_name text,
+  pg_diag_table_name text,
+  pg_diag_column_name text,
+  pg_diag_datatype_name text,
+  pg_diag_constraint_name text,
+  pg_diag_source_file text,
+  pg_diag_source_line text,
+  pg_diag_source_function text
+);
 ```
 
 ## Extension authors and contributors

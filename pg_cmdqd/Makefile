@@ -1,6 +1,6 @@
 CMAKE_BUILD_TYPES := Release Debug
 CMAKE_BUILD_TYPE := Release
-EXECUTABLE_NAME := pg_cmd_queue_daemon
+EXECUTABLE_NAME := pg_cmdqd  # `pg_cmd_queue_daemon` exceeds the available 16 chars for a process name.
 
 executable_targets := $(CMAKE_BUILD_TYPES:%=%/$(EXECUTABLE_NAME))
 makefile_targets := $(CMAKE_BUILD_TYPES:%=%/Makefile)

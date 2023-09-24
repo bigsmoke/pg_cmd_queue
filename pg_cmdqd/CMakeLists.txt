@@ -9,7 +9,7 @@ pkg_check_modules(LIBPQ REQUIRED IMPORTED_TARGET libpq)
 
 add_compile_options(-Wall)
 
-add_executable(pg_cmd_queue_daemon
+add_executable(pg_cmdqd
     utils.h utils.cpp
     logger.h logger.cpp
     lwpg_array.h lwpg_array.cpp
@@ -26,12 +26,17 @@ add_executable(pg_cmd_queue_daemon
     pipefds.h pipefds.cpp
     cmdqueue.h cmdqueue.cpp
     cmdqueuerunner.h
+    cmdqueuerunnercollection.h cmdqueuerunnercollection.cpp
     queuecmdmetadata.h queuecmdmetadata.cpp
     nixqueuecmd.h nixqueuecmd.cpp
     sqlqueuecmd.h sqlqueuecmd.cpp
     pg_cmd_queue_daemon.cpp
 )
 
-target_include_directories(pg_cmd_queue_daemon PUBLIC ${LIBPQ_INCLUDE_DIRS})
-target_link_libraries(pg_cmd_queue_daemon pthread ${LIBPQ_LINK_LIBRARIES})
-link_directories(pg_cmd_queue_daemon ${LIBPQ_LIBRARY_DIRS})
+target_include_directories(pg_cmdqd PUBLIC ${LIBPQ_INCLUDE_DIRS})
+target_link_libraries(pg_cmdqd pthread ${LIBPQ_LINK_LIBRARIES})
+link_directories(pg_cmdqd ${LIBPQ_LIBRARY_DIRS})
+
+add_executable(nixtestcmd
+    nixtestcmd.cpp
+)

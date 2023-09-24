@@ -14,6 +14,7 @@ class CmdQueue
     std::string _validation_error_message;
 
 public:
+    static const std::string CMD_QUEUE_RELNAME;
     static const std::string SELECT_STMT;
 
     std::string queue_cmd_relname;
@@ -26,6 +27,7 @@ public:
     std::optional<std::string> queue_runner_role;
     std::optional<std::string> queue_notify_channel;
     int queue_reselect_interval_msec;
+    std::optional<int> queue_reselect_randomized_every_nth;
     std::string ansi_fg;
 
     CmdQueue() = default;

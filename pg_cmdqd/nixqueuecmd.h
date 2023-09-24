@@ -18,7 +18,7 @@ class NixQueueCmd
 {
     Logger *logger = Logger::getInstance();
 
-    static const std::string SELECT_STMT_WITHOUT_RELNAME;
+    static const std::string SELECT_TEMPLATE;
     static const std::string UPDATE_STMT_WITHOUT_RELNAME;
 
     bool _is_valid = false;
@@ -40,7 +40,9 @@ public:
     NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     ~NixQueueCmd();
 
-    static std::string select_stmt(const CmdQueue &cmd_queue);
+    static std::string select_oldest(const CmdQueue &cmd_queue);
+    static std::string select_random(const CmdQueue &cmd_queue);
+    //static std::string select_notify(const CmdQueue &cmd_queue);
     static std::string update_stmt(const CmdQueue &cmd_queue);
     std::vector<std::optional<std::string>> update_params();
 

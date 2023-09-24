@@ -25,6 +25,10 @@ namespace lwpg
         PGconn *get();
     };
 
+    inline std::shared_ptr<Conn> connectdb(const std::string &conninfo)
+    {
+        return std::make_shared<lwpg::Conn>(PQconnectdb(conninfo.c_str()));
+    }
 }
 
 #endif // LWPG_CONN_H

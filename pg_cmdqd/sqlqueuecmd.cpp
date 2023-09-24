@@ -7,7 +7,7 @@
 
 #include "utils.h"
 
-const std::string SqlQueueCmd::SELECT_STMT_WITHOUT_RELNAME = R"SQL(
+const std::string SqlQueueCmd::SELECT_TEMPLATE = R"SQL(
     SELECT
         queue_cmd_class::text as queue_cmd_class
         ,(parse_ident(queue_cmd_class::text))[
@@ -39,10 +39,22 @@ const std::string SqlQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
         AND cmd_subid IS NOT DISTINCT from $2
 )SQL";
 
-std::string SqlQueueCmd::select_stmt(const CmdQueue &cmd_queue)
+std::string SqlQueueCmd::select_oldest(const CmdQueue &cmd_queue)
 {
-    return formatString(SELECT_STMT_WITHOUT_RELNAME, cmd_queue.queue_cmd_relname.c_str());
+    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "ORDER BY queued_since LIMIT 1");
 }
+
+std::string SqlQueueCmd::select_random(const CmdQueue &cmd_queue)
+{
+    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "TABLESAMPLE SYSTEM_ROWS(1)");
+}
+
+/*
+std::string SqlQueueCmd::select::notify(const CmdQueue &cmd_queue)
+{
+    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "", "queued_since");
+}
+*/
 
 std::string SqlQueueCmd::update_stmt(const CmdQueue &cmd_queue)
 {

@@ -271,6 +271,16 @@ $md$;
 
 --------------------------------------------------------------------------------------------------------------
 
+create function pg_cmd_queue_notify_channel()
+    returns text
+    stable
+    leakproof
+    parallel safe
+    language sql
+    return coalesce(nullif(current_setting('pg_cmd_queue.notify_channel', true), ''), 'pgcmdq');
+
+--------------------------------------------------------------------------------------------------------------
+
 create table cmd_queue (
     queue_cmd_class regclass
         primary key
@@ -413,7 +423,7 @@ create function cmd_queue__notify_daemon_of_changes()
     language plpgsql
     as $$
 declare
-    _channel text := coalesce(nullif(current_setting('pg_cmd_queue.notify_channel', true), ''), 'pgcmdq');
+    _channel text := pg_cmd_queue_notify_channel();
 begin
     assert tg_when = 'AFTER';
     assert tg_op in ('INSERT', 'UPDATE', 'DELETE');
@@ -421,13 +431,7 @@ begin
     assert tg_table_schema = 'cmdq';
     assert tg_table_name = 'cmd_queue';
 
-    if tg_op = 'INSERT' then
-        perform pg_notify(_channel, hstore('inserted queue', NEW.queue_cmd_class::text)::text);
-    elsif tg_op = 'UPDATE' then
-        perform pg_notify(_channel, hstore('updated queue', NEW.queue_cmd_class::text)::text);
-    elsif tg_op = 'DELETE' then
-        perform pg_notify(_channel, hstore('deleted queue', NEW.queue_cmd_class::text)::text);
-    end if;
+    perform pg_notify(_channel, row(tg_table_name, NEW.queue_cmd_class::text, tg_op)::text);
 
     return null;
 end;
@@ -581,7 +585,7 @@ create function queue_cmd__notify()
 declare
     _queue_notify_channel name := coalesce(
         nullif(current_setting('pg_cmd_queue.notify_channel', true), '')
-        ,'pgcmdq'
+        ,'cmdq'
     );
     _queue_cmd_relname name := tg_table_name;
     _cmd_id_expression name := '(cmd_id)::text';
@@ -646,12 +650,15 @@ will be sent on the channel configured in the extension-global
 [`pg_cmd_queue.notify_channel`](#pg_cmd_queue-settings) setting. If that is so
 desired, you can keep
 
-the only argument that this trigger function needs
-is the `NOTIFY` channel name (which should be identical to the channel name in
-the `cmd_queue.queue_notify_channel` column.
+The only argument that this trigger function absolutely requires is the
+`NOTIFY` channel name (which should be identical to the channel name in the
+`cmd_queue.queue_notify_channel` column.  In case that the trigger is attached
+to a table or view in the `cmdq` schema with the relation's name ending in
+`_cmd`, that is also the only _allowed_ argument.
+
 
 When the `queue_cmd_template`-derived relation is a view, this trigger function
-will have to be attached to the underlying table and will require two
+will have to be attached to the underlying table and will require three
 additional arguments: ① the name of the field which will be mapped to `cmd_id`
 in the view; and the name of the field which will be mapped to
 `cmd_subid` in the view.  If there is no `cmd_subid`, this third parameter
@@ -721,6 +728,8 @@ will have to be attached to the underlying table and will require two
 arguments: ① the name of the field which will be mapped to `cmd_id` in the view;
 and the name of the field which will be mapped to `cmd_subid` in the view.  If
 there is no `cmd_subid`, this third parameter should be `null`.
+
+**Note** that this function is as of yet untested!
 $md$;
 
 ----------------------------------------------------------------------------------------------------------
@@ -853,7 +862,6 @@ $md$;
 
 --------------------------------------------------------------------------------------------------------------
 
--- TODO: Add _v1 suffix
 create table sql_queue_cmd_template (
     like queue_cmd_template
        including all
@@ -1344,11 +1352,13 @@ begin
 end;
 $$;
 
-----------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
 
-create procedure test_integration__pg_cmdqd(test_stage$ text)
+/*
+create procedure test__pg_cmdqd()
     set search_path from current
     set plpgsql.check_asserts to true
+    set pg_pure_tests.require_extra_daemon to 'pg_cmdqd'
     language plpgsql
     as $$
 declare
@@ -1356,78 +1366,77 @@ declare
     _cmd_id text;
     _wait_start timestamptz;
 begin
-    assert test_stage$ in ('init', 'run', 'clean');
+    assert exists (select from pg_catalog.pg_stat_activity where application_name = 'pg_cmdqd'),
+        '`pg_cmd_queue_daemon` does not appear to be connected to the database.';
 
-    if test_stage$ = 'init' then
-        create table tst1_nix_cmd (
-            like nix_queue_cmd_template
-                including all
-        );
-        alter table tst1_nix_cmd
-            alter column queue_cmd_class set default 'tst1_nix_cmd';
+    create table tst_nix_cmd (
+        like nix_queue_cmd_template
+            including all
+    );
+    alter table tst_nix_cmd
+        alter column queue_cmd_class set default 'tst_nix_cmd';
 
-        insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
-            ,queue_runner_role
-            ,queue_notify_channel
-            ,queue_reselect_interval
-            ,queue_cmd_timeout
-        )
-        values (
-            'tst1_nix_cmd'
-            ,'nix_queue_cmd_template'
-            ,'cmdq_test_role'
-            ,'tst1_nix_cmd'
-            ,'0 seconds'::interval  -- Let the daemon's epoll() loop go without pause
-            ,'1 second'::interval
-        );
+    insert into cmd_queue (
+        queue_cmd_class
+        ,queue_signature_class
+        ,queue_runner_role
+        ,queue_notify_channel
+        ,queue_reselect_interval
+        ,queue_cmd_timeout
+    )
+    values (
+        'tst_nix_cmd'
+        ,'nix_queue_cmd_template'
+        ,'cmdq_test_role'
+        ,'tst_nix_cmd'
+        ,'0 seconds'::interval  -- Let the daemon's epoll() loop go without pause
+        ,'1 second'::interval
+    );
 
-    elsif test_stage$ = 'run' then
-        insert into tst1_nix_cmd (
-            cmd_id
-            ,cmd_argv
-            ,cmd_env
-            ,cmd_stdin
-        )
-        values (
-            'cmd-with-clean-exit'
-            ,array[
-                'pg_cmdq_test_cmd'
-                ,'--stdout-line'
-                ,'This line should be sent to STDOUT.'
-                ,'--stderr-line'
-                ,'This line is to be sent to STDERR.'
-                ,'--echo-stdin'
-                ,'--stdout-line'
-                ,'This line should be printed after the echoed STDIN.'
-                ,'--echo-env-var'
-                ,'PG_CMDQ_TST_VAR1'
-                ,'--stdout-line'
-                ,'This line should be squeezed between 2 env. variables.'
-                ,'--echo-env-var'
-                ,'PG_CMDQ_TST_VAR2'
-                ,'--exit-code'
-                ,'0'
-            ]
-            ,'PG_CMDQ_TST_VAR1=>var1_value",PG_CMDQ_TST_VAR2=>"var2: with => signs, \\ and \""'::hstore
-            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
-        )
-        returning cmd_id into _cmd_id
-        ;
+    insert into tst_nix_cmd (
+        cmd_id
+        ,cmd_argv
+        ,cmd_env
+        ,cmd_stdin
+    )
+    values (
+        'cmd-with-clean-exit'
+        ,array[
+            'nixtestcmd'
+            ,'--stdout-line'
+            ,'This line should be sent to STDOUT.'
+            ,'--stderr-line'
+            ,'This line is to be sent to STDERR.'
+            ,'--echo-stdin'
+            ,'--stdout-line'
+            ,'This line should be printed after the echoed STDIN.'
+            ,'--echo-env-var'
+            ,'PG_CMDQ_TST_VAR1'
+            ,'--stdout-line'
+            ,'This line should be squeezed between 2 env. variables.'
+            ,'--echo-env-var'
+            ,'PG_CMDQ_TST_VAR2'
+            ,'--exit-code'
+            ,'0'
+        ]
+        ,'PG_CMDQ_TST_VAR1=>var1_value",PG_CMDQ_TST_VAR2=>"var2: with => signs, \\ and \""'::hstore
+        ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+    )
+    returning cmd_id into _cmd_id
+    ;
 
-        _wait_start := clock_timestamp();
-        <<wait>>
-        loop
-            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
-            exit when found;
-            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
-                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
-            end if;
-            pg_sleep(0.001);  -- seconds
-        end loop;
+    _wait_start := clock_timestamp();
+    <<wait>>
+    loop
+        select * into _cmd from tst_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
+        exit when found;
+        if clock_timestamp() - _wait_start() > '10 seconds'::interval then
+            raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
+        end if;
+        pg_sleep(0.001);  -- seconds
+    end loop;
 
-        assert _cmd.cmd_stdout = $out$This line should be sent to STDOUT.
+    assert _cmd.cmd_stdout = $out$This line should be sent to STDOUT.
 This STDIN should be echoed to STDOUT,
 including this 2nd line.
 This line should be printed after the echoed STDIN.
@@ -1435,55 +1444,57 @@ var1_value
 This line should be squeezed between 2 env. variables.
 var2: with => signs, \ and "
 $out$;
-        assert _cmd.cmd_stderr = E'This line is to be sent to STDERR.\n';
-        assert _cmd.cmd_exit_code = 0;
-        assert _cmd.cmd_term_sig is null;
+    assert _cmd.cmd_stderr = E'This line is to be sent to STDERR.\n';
+    assert _cmd.cmd_exit_code = 0;
+    assert _cmd.cmd_term_sig is null;
 
-        insert into tst1_nix_cmd (
-            cmd_id
-            ,cmd_argv
-            ,cmd_env
-            ,cmd_stdin
-        )
-        values (
-            'cmd-exceeds-timeout'
-            ,array[
-                'pg_cmdq_test_cmd'
-                ,'--stdout-line'
-                ,'Line 1.'
-                ,'--sleep'
-                ,'10 seconds'::interval
-                ,'--exit-code'
-                ,'0'
-            ]
-            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
-            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
-        )
-        returning cmd_id into _cmd_id
-        ;
+    insert into tst_nix_cmd (
+        cmd_id
+        ,cmd_argv
+        ,cmd_env
+        ,cmd_stdin
+    )
+    values (
+        'cmd-exceeds-timeout'
+        ,array[
+            'nixtestcmd'
+            ,'--stdout-line'
+            ,'Line 1.'
+            ,'--sleep'
+            ,'10 seconds'::interval
+            ,'--exit-code'
+            ,'0'
+        ]
+        ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
+        ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+    )
+    returning cmd_id into _cmd_id
+    ;
 
-        _wait_start := clock_timestamp();
-        <<wait>>
-        loop
-            select * into _cmd from tst1_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
-            exit when found;
-            if clock_timestamp() - _wait_start() > '10 seconds'::interval then
-                raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
-            end if;
-            pg_sleep(0.001);  -- seconds
-        end loop;
+    _wait_start := clock_timestamp();
+    <<wait>>
+    loop
+        select * into _cmd from tst_nix_cmd where cmd_id = _cmd_id and cmd_runtime is not null;
+        exit when found;
+        if clock_timestamp() - _wait_start() > '10 seconds'::interval then
+            raise assert_failure using message = format('Waited > 10s for pg_cmdqd to run %s', _cmd_id);
+        end if;
+        pg_sleep(0.001);  -- seconds
+    end loop;
 
-        assert _cmd.cmd_stdout = E'Line 1.\n';
-        assert _cmd.cmd_stderr = '';
-        assert _cmd.cmd_exit_code is null;
-        assert _cmd.cmd_term_sig = 9, format('%s ≠ 9 (SIGKILL)', _cmd.cmd_term_sig);
+    assert _cmd.cmd_stdout = E'Line 1.\n';
+    assert _cmd.cmd_stderr = '';
+    assert _cmd.cmd_exit_code is null;
+    assert _cmd.cmd_term_sig = 9, format('%s ≠ 9 (SIGKILL)', _cmd.cmd_term_sig);
 
-    elsif test_stage$ = 'clean' then
-        drop table tst1_nix_cmd cascade;
-        delete from cmd_queue where queue_cmd_class = 'tst1_nix_cmd';
-    end if;
+    <<clean>>
+    begin
+        drop table tst_nix_cmd cascade;
+        delete from cmd_queue where queue_cmd_class = 'tst_nix_cmd';
+    end clean;
 end;
 $$;
+*/
 
 ----------------------------------------------------------------------------------------------------------
 

@@ -141,7 +141,7 @@ namespace lwpg
                 return std::nullopt;
 
             int fieldCount = PQnfields(result->get());
-            std::unordered_map<std::string, std::string> fieldMappings;
+            std::unordered_map<std::string, int> fieldMappings;
             for (int i = 0; i < fieldCount; i++)
             {
                 std::string value = PQfname(result->get(), i);
@@ -154,6 +154,10 @@ namespace lwpg
 
         void exec(const std::string &query);
         void exec(const std::string &query, const std::vector<std::optional<std::string>> &params);
+        void prepare(const std::string &stmt_name, const std::string &statement, int n_params = 0);
+        std::unordered_map<std::string, int> describe_prepared_field_mappings(const std::string &stmt_name);
+
+        std::shared_ptr<lwpg::Result> exec_prepared(const std::string &stmt_name, const std::vector<std::optional<std::string>> &params);
 
         int socket() const;
     };

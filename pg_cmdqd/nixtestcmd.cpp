@@ -1,52 +1,91 @@
+#include <iostream>
 #include <stdexcept>
 #include <string>
+
+#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 const std::string USAGE = R"(
 nixtestcmd [--exit-code <exit_code>|--exit-signal <signal_no>] [--close-stdin] [--close-stdout] [--close-stderr]
 )";
 
+class CmdLineParseError : std::exception
+{
+    std::string _message;
+
+public:
+    CmdLineParseError(const std::string &msg)
+        : _message(msg) {}
+
+    const char *what() const noexcept override
+    {
+        return _message.data();
+    }
+};
+
+
 int main(int argc, char** argv)
 {
-    bool exit_normally = true;
-    int exit_code = -1;
-    int exit_signal = -1;
-    bool close_stdin = false;
-    bool close_stdout = false;
-    bool close_stderr = false;
-
-    for (int i = 0; i < argc; i++)
+    try
     {
-        std::string arg(argv[i]);
-        if (arg == "--exit-code")
+        for (int i = 1; i < argc; i++)
         {
-            if (i == argc)
-                throw std::runtime_error("Missing argument to --exit-code option");
-            exit_code = std::stoi(argv[++i]);
-            exit_normally = true;
-        }
-        else if (arg == "--exit-signal")
-        {
-            if (i == argc)
-                throw std::runtime_error("Missing argument to --exit-signal option");
-            exit_signal = std::stoi(argv[++i]);
-            exit_normally = false;
-        }
-        else if (arg == "--close-stdin")
-        {
-            close_stdin = true;
-        }
-        else if (arg == "--close-stdout")
-        {
-            close_stdout = true;
-        }
-        else if (arg == "--close-stderr")
-        {
-            close_stderr = true;
+            std::string arg(argv[i]);
+            if (arg == "--exit-code")
+            {
+                if (i == argc)
+                    throw std::runtime_error("Missing argument to --exit-code option");
+                int exit_code = std::stoi(argv[++i]);
+                exit(exit_code);
+            }
+            else if (arg == "--exit-signal")
+            {
+                if (i == argc)
+                    throw std::runtime_error("Missing argument to --exit-signal option");
+                int exit_signal = std::stoi(argv[++i]);
+                raise(exit_signal);
+            }
+            else if (arg == "--close-stdin")
+            {
+                close(STDIN_FILENO);
+            }
+            else if (arg == "--close-stdout")
+            {
+                close(STDOUT_FILENO);
+            }
+            else if (arg == "--close-stderr")
+            {
+                close(STDOUT_FILENO);
+            }
+            else if (arg == "--stdout-line")
+            {
+                if (i == argc)
+                    throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
+                std::cout << argv[++i] << std::endl;
+            }
+            else if (arg == "--stderr-line")
+            {
+                if (i == argc)
+                    throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
+                std::cerr << argv[++i] << std::endl;
+            }
+            else if (arg == "--echo-stdin")
+            {
+                std::cout << std::cin.rdbuf();
+            }
+            else if (arg == "--echo-env-var")
+            {
+                if (i == argc)
+                    throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
+                std::cout << getenv(argv[++i]);
+            }
+            else throw CmdLineParseError(std::string("Unrecognized argument: ") + argv[i]);
         }
     }
-
-    if (exit_code >= 0 and exit_signal >= 0)
+    catch (const CmdLineParseError &err)
     {
-        throw std::runtime_error("--exit-code and --exit-signal cannot be used together.");
+        std::cerr << err.what();
+        exit(254);
     }
 }

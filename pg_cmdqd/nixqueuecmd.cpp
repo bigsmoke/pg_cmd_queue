@@ -35,7 +35,7 @@ pidfd_open(pid_t pid, unsigned int flags)
    return syscall(__NR_pidfd_open, pid, flags);
 }
 
-const std::string NixQueueCmd::SELECT_STMT_WITHOUT_RELNAME = R"SQL(
+const std::string NixQueueCmd::SELECT_TEMPLATE = R"SQL(
     SELECT
         queue_cmd_class::text as queue_cmd_class
         ,(parse_ident(queue_cmd_class::text))[
@@ -49,9 +49,7 @@ const std::string NixQueueCmd::SELECT_STMT_WITHOUT_RELNAME = R"SQL(
         ,cmd_stdin
     FROM
         cmdq.%s
-    ORDER BY
-        cmd_queued_since
-    LIMIT 1
+    %s
     FOR UPDATE SKIP LOCKED
 )SQL";
 
@@ -69,10 +67,24 @@ const std::string NixQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
         AND cmd_subid IS NOT DISTINCT from $2
 )SQL";
 
-std::string NixQueueCmd::select_stmt(const CmdQueue &cmd_queue)
+std::string NixQueueCmd::select_oldest(const CmdQueue &cmd_queue)
 {
-    return formatString(SELECT_STMT_WITHOUT_RELNAME, cmd_queue.queue_cmd_relname.c_str());
+    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "ORDER BY cmd_queued_since LIMIT 1");
 }
+
+std::string NixQueueCmd::select_random(const CmdQueue &cmd_queue)
+{
+    // If `ORDER BY random() LIMIT` turns out to be too slow we could do:
+    // `OFFSET floor(random() * (SELECT count(*) FROM <some_nix_queue_cmd>)) LIMIT 1`
+    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "ORDER BY random() LIMIT 1");
+}
+
+/*
+std::string NixQueueCmd::select::notify(const CmdQueue &cmd_queue)
+{
+    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "", "queued_since");
+}
+*/
 
 std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue)
 {

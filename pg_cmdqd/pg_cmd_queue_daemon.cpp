@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <stdexcept>
@@ -17,6 +18,7 @@
 #include "lwpg_results.h"
 #include "cmdqueue.h"
 #include "cmdqueuerunner.h"
+#include "cmdqueuerunnercollection.h"
 #include "nixqueuecmd.h"
 #include "sqlqueuecmd.h"
 #include "utils.h"
@@ -138,62 +140,13 @@ int main(int argc, char **argv)
     else
         logger->log(LOG_DEBUG1, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[0m environment variables…");
 
-    lwpg::Context pg;
-    std::shared_ptr<lwpg::Conn> conn = pg.connectdb(conn_str);
+    CmdQueueRunnerCollection runner_collection(conn_str);
 
-    logger->log(
-        LOG_INFO,
-        "DB connection established to \x1b[1m%s\x1b[22m on \x1b[1m%s:%s\x1b[22m as \x1b[1m%s\x1b[22m",
-        PQdb(conn->get()), PQhost(conn->get()), PQport(conn->get()), PQuser(conn->get())
-    );
+    runner_collection.refresh_queue_list(explicit_queue_cmd_classes);  // TODO: Move call to constructor?
 
-    lwpg::Results<CmdQueue> cmd_queue_results = pg.query<CmdQueue>(CmdQueue::SELECT_STMT, {
-        lwpg::to_string(explicit_queue_cmd_classes)
-    });
+    runner_collection.listen_for_queue_list_changes();
 
-    std::unordered_map<std::string, CmdQueueRunner<NixQueueCmd>> nix_cmd_queue_runners;
-    std::unordered_map<std::string, CmdQueueRunner<SqlQueueCmd>> sql_cmd_queue_runners;
-
-    for (CmdQueue cmd_queue : cmd_queue_results)
-    {
-        if (!cmd_queue.is_valid())
-        {
-            std::cerr << cmd_queue.validation_error_message();
-            continue;
-        }
-
-        if (cmd_queue.queue_signature_class == "nix_queue_cmd_template")
-        {
-            nix_cmd_queue_runners.emplace(
-                std::piecewise_construct,
-                std::forward_as_tuple(cmd_queue.queue_cmd_relname),
-                std::forward_as_tuple(cmd_queue, conn_str)
-            );
-        }
-        else if (cmd_queue.queue_signature_class == "sql_queue_cmd_template")
-        {
-            sql_cmd_queue_runners.emplace(
-                std::piecewise_construct,
-                std::forward_as_tuple(cmd_queue.queue_cmd_relname),
-                std::forward_as_tuple(cmd_queue, conn_str)
-            );
-        }
-        else
-        {
-            logger->log(
-                LOG_ERROR,
-                "Command queue \x1b[1m%s\x1b[22m has unrecognized template type: \x1b[1m%s\x1b[22m",
-                cmd_queue.queue_cmd_relname.c_str(), cmd_queue.queue_signature_class.c_str()
-            );
-        }
-    }
-
-    for (auto &it : nix_cmd_queue_runners)
-        if (it.second.thread.joinable())
-            it.second.thread.join();
-    for (auto &it : sql_cmd_queue_runners)
-        if (it.second.thread.joinable())
-            it.second.thread.join();
+    runner_collection.join_all_threads();
 
     return 0;
 }

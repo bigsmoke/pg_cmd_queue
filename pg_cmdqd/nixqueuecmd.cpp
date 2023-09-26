@@ -15,11 +15,9 @@
 #include <iostream>
 #include <memory>
 
+#include "pq-raii/libpq-raii.hpp"
 #include "cmdqueue.h"
 #include "fdguard.h"
-#include "lwpg_result.h"
-#include "lwpg_array.h"
-#include "lwpg_hstore.h"
 #include "pipefds.h"
 #include "utils.h"
 
@@ -100,42 +98,42 @@ std::vector<std::optional<std::string>> NixQueueCmd::update_params()
     params.push_back(meta.cmd_subid);
     params.push_back(formatString("%f", meta.cmd_runtime_start));
     params.push_back(formatString("%f", meta.cmd_runtime_end));
-    params.push_back(lwpg::to_nullable_string(cmd_exit_code));
-    params.push_back(lwpg::to_nullable_string(cmd_term_sig));
+    params.push_back(PQ::as_text(cmd_exit_code));
+    params.push_back(PQ::as_text(cmd_term_sig));
     params.push_back(cmd_stdout);
     params.push_back(cmd_stderr);
 
     return params;
 }
 
-NixQueueCmd::NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
-    : meta(result, row, fieldMapping)
+NixQueueCmd::NixQueueCmd(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &field_numbers) noexcept
+    : meta(result, row_number, field_numbers)
 {
     try
     {
-        if (PQgetisnull(result->get(), row, fieldMapping.at("cmd_argv")))
+        if (PQgetisnull(result->get(), row_number, field_numbers.at("cmd_argv")))
         {
             throw std::domain_error("`cmd_argv` should never be `NULL`.");
         }
-        std::string raw_cmd_argv = PQgetvalue(result->get(), row, fieldMapping.at("cmd_argv"));
-        cmd_argv = lwpg::array_to_vector(raw_cmd_argv);
+        std::string raw_cmd_argv = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_argv"));
+        cmd_argv = PQ::from_text_array(raw_cmd_argv);
 
-        if (PQgetisnull(result->get(), row, fieldMapping.at("cmd_env")))
+        if (PQgetisnull(result->get(), row_number, field_numbers.at("cmd_env")))
         {
             throw std::domain_error("`cmd_env` should never be `NULL`.");
         }
-        std::string raw_cmd_env = PQgetvalue(result->get(), row, fieldMapping.at("cmd_env"));
-        cmd_env = lwpg::hstore_to_unordered_map(raw_cmd_env);
+        std::string raw_cmd_env = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_env"));
+        cmd_env = PQ::from_text_hstore(raw_cmd_env);
 
         // For `cmd_stdin`, we can ignore NULLness, because `PGgetvalue()` returns an empty string when the
         // field is `NULL`, which is what we'd want anyway.
-        cmd_stdin = PQgetvalue(result->get(), row, fieldMapping.at("cmd_stdin"));
+        cmd_stdin = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_stdin"));
 
         _is_valid = true;
     }
     catch (std::exception &ex)
     {
-        logger->log(LOG_ERROR, "Error parsing `%s` queue command data: %s", meta.queue_cmd_class.c_str(), ex.what());
+        logger->log(LOG_ERROR, "Error parsing `nix_queue_cmd` data: %s", ex.what());
         _is_valid = false;
     }
 }
@@ -165,7 +163,7 @@ bool NixQueueCmd::cmd_succeeded() const
     return cmd_exit_code.has_value() and cmd_exit_code.value() == 0;
 }
 
-void NixQueueCmd::run_cmd(std::shared_ptr<lwpg::Conn> &conn)
+void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
 {
     meta.stamp_start_time();
 

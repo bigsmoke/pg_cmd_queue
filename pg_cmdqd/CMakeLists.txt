@@ -12,16 +12,7 @@ add_compile_options(-Wall)
 add_executable(pg_cmdqd
     utils.h utils.cpp
     logger.h logger.cpp
-    lwpg_array.h lwpg_array.cpp
-    lwpg_conn.h lwpg_conn.cpp
-    lwpg_context.h lwpg_context.cpp
-    lwpg_error.h lwpg_error.cpp
-    lwpg_hstore.h lwpg_hstore.cpp
-    lwpg_nullable.h lwpg_nullable.cpp
-    lwpg_result.h lwpg_result.cpp
-    lwpg_result_iterator.h lwpg_result_iterator.cpp
-    lwpg_results.h lwpg_results.cpp
-    lwpg_string.h lwpg_string.cpp
+    pq-raii/libpq-raii.hpp
     fdguard.h fdguard.cpp
     pipefds.h pipefds.cpp
     cmdqueue.h cmdqueue.cpp

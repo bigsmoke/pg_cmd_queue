@@ -3,6 +3,7 @@
 
 #include <shared_mutex>
 
+#include "pq-raii/libpq-raii.hpp"
 #include "cmdqueuerunner.h"
 #include "logger.h"
 
@@ -16,7 +17,7 @@ class CmdQueueRunnerCollection
     std::unordered_map<std::string, CmdQueueRunner<SqlQueueCmd>> _sql_cmd_queue_runners;
     Logger *logger = Logger::getInstance();
     std::string _conn_str;
-    std::shared_ptr<lwpg::Conn> _conn;
+    std::shared_ptr<PG::conn> _conn;
 
 public:
     CmdQueueRunnerCollection() = delete;

@@ -5,8 +5,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "lwpg_nullable.h"
-#include "lwpg_result.h"
+#include "pq-raii/libpq-raii.hpp"
 
 class CmdQueue
 {
@@ -31,7 +30,7 @@ public:
     std::string ansi_fg;
 
     CmdQueue() = default;
-    CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    CmdQueue(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &field_numbers) noexcept;
     bool is_valid() const;
     std::string validation_error_message() const;
 };

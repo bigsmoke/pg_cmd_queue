@@ -3,7 +3,7 @@
 #include <iostream>
 #include <memory>
 
-#include "lwpg_result.h"
+#include "pq-raii/libpq-raii.hpp"
 #include "utils.h"
 
 const std::string CmdQueue::CMD_QUEUE_RELNAME = "cmd_queue";
@@ -32,30 +32,30 @@ const std::string CmdQueue::SELECT_STMT = R"SQL(
 /**
  * @brief CmdQueue::CmdQueue
  * @param result
- * @param row
- * @param fieldMapping
+ * @param row_number
+ * @param field_numbers
  */
-CmdQueue::CmdQueue(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
+CmdQueue::CmdQueue(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &field_numbers) noexcept
 {
     try
     {
-        queue_cmd_relname = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_relname"));
-        queue_signature_class = PQgetvalue(result->get(), row, fieldMapping.at("queue_signature_class"));
+        queue_cmd_relname = PQgetvalue(result->get(), row_number, field_numbers.at("queue_cmd_relname"));
+        queue_signature_class = PQgetvalue(result->get(), row_number, field_numbers.at("queue_signature_class"));
 
-        queue_runner_role = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_runner_role"));
+        queue_runner_role = PQ::getnullable(result, row_number, field_numbers.at("queue_runner_role"));
 
-        queue_notify_channel = lwpg::getnullable(result->get(), row, fieldMapping.at("queue_notify_channel"));
+        queue_notify_channel = PQ::getnullable(result, row_number, field_numbers.at("queue_notify_channel"));
 
-        std::string queue_reselect_interval_msec = PQgetvalue(result->get(), row, fieldMapping.at("queue_reselect_interval_msec"));
+        std::string queue_reselect_interval_msec = PQgetvalue(result->get(), row_number, field_numbers.at("queue_reselect_interval_msec"));
         this->queue_reselect_interval_msec = std::stoi(queue_reselect_interval_msec);
 
-        if (not PQgetisnull(result->get(), row, fieldMapping.at("queue_reselect_randomized_every_nth")))
+        if (not PQgetisnull(result->get(), row_number, field_numbers.at("queue_reselect_randomized_every_nth")))
         {
-            std::string queue_reselect_randomized_every_nth = PQgetvalue(result->get(), row, fieldMapping.at("queue_reselect_randomized_every_nth"));
+            std::string queue_reselect_randomized_every_nth = PQgetvalue(result->get(), row_number, field_numbers.at("queue_reselect_randomized_every_nth"));
             this->queue_reselect_randomized_every_nth = std::stoi(queue_reselect_randomized_every_nth);
         }
 
-        ansi_fg = PQgetvalue(result->get(), row, fieldMapping.at("ansi_fg"));
+        ansi_fg = PQgetvalue(result->get(), row_number, field_numbers.at("ansi_fg"));
 
         _is_valid = true;
     }

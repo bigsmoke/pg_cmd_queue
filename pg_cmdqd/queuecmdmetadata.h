@@ -5,9 +5,9 @@
 #include <string>
 #include <unordered_map>
 
+#include "pq-raii/libpq-raii.hpp"
 #include "cmdqueue.h"
 #include "logger.h"
-#include "lwpg_context.h"
 
 class QueueCmdMetadata
 {
@@ -28,7 +28,7 @@ public:
     double cmd_runtime_end;
 
     QueueCmdMetadata() = delete;
-    QueueCmdMetadata(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    QueueCmdMetadata(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     ~QueueCmdMetadata() = default;
 
     bool is_valid() const;

@@ -8,9 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "pq-raii/libpq-raii.hpp"
 #include "logger.h"
-#include "lwpg_nullable.h"
-#include "lwpg_result.h"
 #include "cmdqueue.h"
 #include "queuecmdmetadata.h"
 
@@ -37,7 +36,7 @@ public:
     std::string cmd_stdout = "";
     std::string cmd_stderr = "";
 
-    NixQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    NixQueueCmd(std::shared_ptr<PG::result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     ~NixQueueCmd();
 
     static std::string select_oldest(const CmdQueue &cmd_queue);
@@ -46,7 +45,7 @@ public:
     static std::string update_stmt(const CmdQueue &cmd_queue);
     std::vector<std::optional<std::string>> update_params();
 
-    void run_cmd(std::shared_ptr<lwpg::Conn> &conn);
+    void run_cmd(std::shared_ptr<PG::conn> &conn);
 };
 
 #endif // NIXQUEUECMD_H

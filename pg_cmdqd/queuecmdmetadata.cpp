@@ -2,20 +2,20 @@
 
 #include <chrono>
 
-#include "lwpg_result.h"
+#include "pq-raii/libpq-raii.hpp"
 #include "utils.h"
 
-QueueCmdMetadata::QueueCmdMetadata(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
+QueueCmdMetadata::QueueCmdMetadata(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &fieldMapping) noexcept
 {
     try
     {
-        queue_cmd_class = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_class"));
+        queue_cmd_class = PQ::getvalue(result, row_number, fieldMapping.at("queue_cmd_class"));
 
-        queue_cmd_relname = PQgetvalue(result->get(), row, fieldMapping.at("queue_cmd_relname"));
+        queue_cmd_relname = PQ::getvalue(result, row_number, fieldMapping.at("queue_cmd_relname"));
 
-        cmd_id = PQgetvalue(result->get(), row, fieldMapping.at("cmd_id"));
+        cmd_id = PQ::getvalue(result, row_number, fieldMapping.at("cmd_id"));
 
-        cmd_subid = lwpg::getnullable(result->get(), row, fieldMapping.at("cmd_subid"));
+        cmd_subid = PQ::getnullable(result, row_number, fieldMapping.at("cmd_subid"));
 
         _is_valid = true;
     }

@@ -12,10 +12,8 @@
 
 #include <libpq-fe.h>
 
+#include "pq-raii/libpq-raii.hpp"
 #include "logger.h"
-#include "lwpg_array.h"
-#include "lwpg_context.h"
-#include "lwpg_results.h"
 #include "cmdqueue.h"
 #include "cmdqueuerunner.h"
 #include "cmdqueuerunnercollection.h"

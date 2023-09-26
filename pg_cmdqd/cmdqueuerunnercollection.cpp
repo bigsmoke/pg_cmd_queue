@@ -1,8 +1,6 @@
 #include "cmdqueuerunnercollection.h"
 
-#include "libpq-fe.h"
-#include "lwpg_array.h"
-#include "lwpg_notify.h"
+#include "pq-raii/libpq-raii.hpp"
 
 CmdQueueRunnerCollection::CmdQueueRunnerCollection(const std::string &conn_str)
     : _conn_str(conn_str)
@@ -11,7 +9,7 @@ CmdQueueRunnerCollection::CmdQueueRunnerCollection(const std::string &conn_str)
     int connect_retry_seconds = 1;
     while (true)
     {
-        _conn = lwpg::connectdb(conn_str);
+        _conn = PQ::connectdb(conn_str);
         if (PQstatus(_conn->get()) == CONNECTION_OK)
             break;
 
@@ -32,21 +30,21 @@ void CmdQueueRunnerCollection::refresh_queue_list(const std::vector<std::string>
 {
     static const int max_retry_seconds = 60;
 
-    std::shared_ptr<lwpg::Result> result;
+    std::shared_ptr<PG::result> result;
     int retry_seconds = 1;
     while (true)
     {
-        result = lwpg::execParams(_conn, CmdQueue::SELECT_STMT, 1, {}, {lwpg::to_string(explicit_queue_cmd_classes)});
+        result = PQ::execParams(_conn, CmdQueue::SELECT_STMT, 1, {}, {PQ::as_text_array(explicit_queue_cmd_classes)});
 
         if (PQresultStatus(result->get())) break;
 
-        logger->log(LOG_ERROR, "Failed to SELECT cmd_queue list: %s", PQresultErrorMessage(result->get()));
+        logger->log(LOG_ERROR, "Failed to SELECT cmd_queue list: %s", PQ::resultErrorMessage(result).c_str());
         logger->log(LOG_INFO, "Will SELECT again in %i seconds…", retry_seconds);
         std::this_thread::sleep_for(std::chrono::seconds(retry_seconds));
         if (retry_seconds * 2 <= max_retry_seconds) retry_seconds *= 2;
     }
 
-    std::unordered_map<std::string, int> fieldNumbers = lwpg::fnumbers(result);
+    std::unordered_map<std::string, int> fieldNumbers = PQ::fnumbers(result);
     for (int i = 0; i < PQntuples(result->get()); i++)
     {
         CmdQueue cmd_queue(result, i, fieldNumbers);
@@ -63,7 +61,7 @@ void CmdQueueRunnerCollection::refresh_queue_list(const std::vector<std::string>
 
 void CmdQueueRunnerCollection::listen_for_queue_list_changes()
 {
-    std::shared_ptr<lwpg::Result> listen_result = lwpg::exec(_conn, "LISTEN cmdq");
+    std::shared_ptr<PG::result> listen_result = PQ::exec(_conn, "LISTEN cmdq");
     if (PQresultStatus(listen_result->get()) != PGRES_COMMAND_OK)
     {
         logger->log(LOG_ERROR, "Failed to `LISTEN` for `NOTIFY` events on the `cmdq` channel: %s", PQerrorMessage(_conn->get()));
@@ -94,7 +92,7 @@ void CmdQueueRunnerCollection::listen_for_queue_list_changes()
         PQconsumeInput(_conn->get());
         while (true)
         {
-            std::shared_ptr<lwpg::Notify> notify = lwpg::notifies(_conn);
+            std::shared_ptr<PG::notify> notify = PQ::notifies(_conn);
             if (notify->get() == nullptr)
                 break;
 

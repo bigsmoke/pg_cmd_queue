@@ -72,7 +72,7 @@ variables:
 
 | Setting name                          | Default setting  |
 | ------------------------------------- | ---------------- |
-| `pg_cmd_queue.notify_channel`         | `pgcmdq`         |
+| `pg_cmd_queue.notify_channel`         | `cmdq`           |
 
 ## Planned features for `pg_cmd_queue`
 
@@ -277,7 +277,7 @@ create function pg_cmd_queue_notify_channel()
     leakproof
     parallel safe
     language sql
-    return coalesce(nullif(current_setting('pg_cmd_queue.notify_channel', true), ''), 'pgcmdq');
+    return coalesce(nullif(current_setting('pg_cmd_queue.notify_channel', true), ''), 'cmdq');
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -472,21 +472,32 @@ begin atomic
         from
             fqn
     )
-    ,rgb as (
+    ,color_space as (
         select
-            ('x' || substring(md5(queue_cmd_class_hash), 1, 2))::bit(8)::int as r
-            ,('x' || substring(md5(queue_cmd_class_hash), 3, 2))::bit(8)::int as g
-            ,('x' || substring(md5(queue_cmd_class_hash), 5, 2))::bit(8)::int as b
+            r, g, b
+            ,rank() over (order by r, g, b) as color_no
+        from
+            generate_series(100, 240, 10) as r
+        cross join
+            generate_series(100, 240, 10) as g
+        cross join
+            generate_series(100, 240, 10) as b
+        where
+            not (abs(r-g) < 30 and abs(g-b) < 30)  -- Cut out greys
+    )
+    ,number as (
+        select
+            ('x' || substring(md5(queue_cmd_class_hash), 1, 3))::bit(11)::int as hash_no
         from
             hash
     )
-    ,brighter as (
+    ,distinct_color as (
         select
-            ((256 - 100) * (rgb.r/256.0) + 100)::int as r
-            ,((256 - 100) * (rgb.g/256.0) + 100)::int as g
-            ,((256 - 100) * (rgb.b/256.0) + 100)::int as b
+            r,g,b
         from
-            rgb
+            color_space
+        where
+            color_space.color_no = (select hash_no from number)
     )
     select
         rgb.*
@@ -494,7 +505,7 @@ begin atomic
         ,format(E'[38;2;%s;%s;%sm', rgb.r, rgb.g, rgb.b) as ansi_fg
         ,format(E'[48;2;%s;%s;%sm', rgb.r, rgb.g, rgb.b) as ansi_bg
     from
-        brighter as rgb
+        distinct_color as rgb
     ;
 end;
 

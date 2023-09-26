@@ -3,10 +3,9 @@
 
 #include <string>
 
+#include "pq-raii/libpq-raii.hpp"
 #include "cmdqueue.h"
 #include "logger.h"
-#include "lwpg_conn.h"
-#include "lwpg_error.h"
 #include "queuecmdmetadata.h"
 
 
@@ -22,7 +21,7 @@ class SqlQueueCmd
     static void receive_notice_c_wrapper(void *arg, const PGresult *res);
     void receive_notice(const PGresult *res);
 
-    lwpg::Error handle_sql_fatality(std::shared_ptr<lwpg::Result> &result);
+    std::optional<std::map<char, std::optional<std::string>>> handle_sql_fatality(std::shared_ptr<PG::result> &result);
 
 public:
     QueueCmdMetadata meta;
@@ -30,11 +29,11 @@ public:
     std::string cmd_sql;
     std::string cmd_sql_result_status;
     std::vector<std::vector<std::string>> cmd_sql_result_rows;
-    std::optional<lwpg::Error> cmd_sql_fatal_error;
-    std::vector<lwpg::Error> cmd_sql_nonfatal_errors;
+    std::optional<std::map<char, std::optional<std::string>>> cmd_sql_fatal_error;
+    std::vector<std::map<char, std::optional<std::string>>> cmd_sql_nonfatal_errors;
 
     SqlQueueCmd() = delete;
-    SqlQueueCmd(std::shared_ptr<lwpg::Result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    SqlQueueCmd(std::shared_ptr<PG::result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     ~SqlQueueCmd() = default;
 
     bool is_valid() const;
@@ -45,7 +44,7 @@ public:
     static std::string update_stmt(const CmdQueue &cmd_queue);
     std::vector<std::optional<std::string>> update_params();
 
-    void run_cmd(std::shared_ptr<lwpg::Conn> &conn);
+    void run_cmd(std::shared_ptr<PG::conn> &conn);
 };
 
 #endif // SQLQUEUECMD_H

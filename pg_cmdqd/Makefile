@@ -10,10 +10,10 @@ makefile_targets := $(CMAKE_BUILD_TYPES:%=%/Makefile)
 all: $(executable_targets)
 
 .SECONDEXPANSION:
-$(executable_targets): $$(@D)/Makefile *.cpp *.h
+$(executable_targets): $$(@D)/Makefile *.cpp *.h pq-raii/*.hpp
 	$(MAKE) -C "$(@D)" -j 2
 
-$(makefile_targets): CMakeLists.txt *.cpp *.h
+$(makefile_targets): CMakeLists.txt *.cpp *.h pq-raii/*.hpp
 	cmake -DCMAKE_BUILD_TYPE="$(@D)" -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -S "$(CURDIR)" -B $(@D)
 	ln -sf $(@D)/compile_commands.json .
 

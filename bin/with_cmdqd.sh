@@ -4,6 +4,7 @@
 SCRIPT_NAME=$(basename "$0")
 
 # TODO: parse -d from $@
+ARGV=("$@")
 
 clean_exit() {
     local exit_code="${1:-0}"
@@ -24,16 +25,24 @@ clean_exit() {
     fi
 
     if [ -n "$timer_pid" ]; then
-        kill $timer_pid
+        kill "$timer_pid"; timer_pid=
     fi
 
     exit $exit_code
 }
 
 receive_sigusr1() {
-    exec "$@"
+    trap - SIGUSR2
+    kill "$timer_pid"; timer_pid=
+    "${ARGV[@]}"
 }
 
+# The only way I could think of to make this script time out was to background a timer child process,
+# and then either:
+#   (a) let the child be killed when the previously spawned `pg_cmdqd` child process sends
+#       us a `SIGUSR1`, or
+#   (b) let the child emit a `SIGUSR2` signal back to the parent, which will than prompt us to
+#       initiate a clean exit (_with_ error code, mind you).
 send_sigusr2_after_timeout() {
     local pid=$1
     sleep "$CMDQD_SIGUSR1_TIMEOUT"
@@ -42,11 +51,12 @@ send_sigusr2_after_timeout() {
 
 receive_sigusr2() {
     echo -e "\x1b[31m$CMDQD_SIGUSR1_TIMEOUT timeout expired while waiting to receive the \x1b[1mSIGUSR1\x1b[22m signal from \x1b[1m$(basename "$CMDQD_BIN")\x1b[22m.\x1b[0m"
+    timer_pid=
     clean_exit 4
 }
 
 export PGDATABASE="contrib_regression"
-"$CMDQD_BIN" &
+"$CMDQD_BIN" --log-level LOG_DEBUG5 &
 cmdqd_pid=$!
 
 trap clean_exit EXIT

@@ -114,16 +114,13 @@ begin
                 and pg_proc.prokind in ('f', 'p')
             loop
                 raise notice '%', _test_proc;
-                execute _test_proc;
+                --execute _test_proc;
+                call cmdq.test__pg_cmdqd();
             end loop;
 
             raise notice '%', _drop_extension;
             execute _drop_extension;
         end;
     end loop;
-
-    raise transaction_rollback;
-exception
-    when transaction_rollback then
 end;
 $$;

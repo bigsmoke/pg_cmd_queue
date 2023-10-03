@@ -35,14 +35,20 @@ int PipeFds::write_fd() const
 
 void PipeFds::close_read_fd()
 {
+    if (this->fds[0] == -1) return;
+
     int close_result;
     while ((close_result = close(fds[0])) == -1 && errno == EINTR) {}
+    this->fds[0] = -1;
     if (close_result == -1) throw std::runtime_error(strerror(errno));
 }
 
 void PipeFds::close_write_fd()
 {
+    if (this->fds[1] == -1) return;
+
     int close_result;
     while ((close_result = close(fds[1])) == -1 && errno == EINTR) {}
+    this->fds[1] = -1;
     if (close_result == -1) throw std::runtime_error(strerror(errno));
 }

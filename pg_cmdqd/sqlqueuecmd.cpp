@@ -6,23 +6,28 @@
 #include "pq-raii/libpq-raii.hpp"
 #include "utils.h"
 
-const std::string SqlQueueCmd::SELECT_TEMPLATE = R"SQL(
-    SELECT
-        queue_cmd_class::text as queue_cmd_class
-        ,(parse_ident(queue_cmd_class::text))[
-            array_upper(parse_ident(queue_cmd_class::text), 1)
-        ] as queue_cmd_relname
-        ,cmd_id
-        ,cmd_subid
-        ,extract(epoch from cmd_queued_since) as cmd_queued_since
-        ,cmd_sql
-    FROM
-        cmdq.%s
-    ORDER BY
-        cmd_queued_since
-    LIMIT 1
-    FOR UPDATE SKIP LOCKED
-)SQL";
+std::string SqlQueueCmd::select_stmt(const CmdQueue &cmd_queue, const std::string &order_by)
+{
+    return std::string(R"SQL(
+SELECT
+    queue_cmd_class::text as queue_cmd_class
+    ,(parse_ident(queue_cmd_class::text))[
+        array_upper(parse_ident(queue_cmd_class::text), 1)
+    ] as queue_cmd_relname
+    ,cmd_id
+    ,cmd_subid
+    ,extract(epoch from cmd_queued_since) as cmd_queued_since
+    ,cmd_sql
+FROM
+    cmdq.)SQL" + cmd_queue.queue_cmd_relname /* TODO: escape relname */ + R"SQL(
+WHERE
+    cmd_runtime IS NULL
+ORDER BY
+    )SQL" + order_by + R"SQL(
+LIMIT 1
+FOR UPDATE SKIP LOCKED
+)SQL");
+}
 
 const std::string SqlQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
     UPDATE
@@ -37,16 +42,6 @@ const std::string SqlQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
         cmd_id = $1
         AND cmd_subid IS NOT DISTINCT from $2
 )SQL";
-
-std::string SqlQueueCmd::select_oldest(const CmdQueue &cmd_queue)
-{
-    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "ORDER BY queued_since LIMIT 1");
-}
-
-std::string SqlQueueCmd::select_random(const CmdQueue &cmd_queue)
-{
-    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "TABLESAMPLE SYSTEM_ROWS(1)");
-}
 
 /*
 std::string SqlQueueCmd::select::notify(const CmdQueue &cmd_queue)
@@ -142,7 +137,7 @@ SqlQueueCmd::handle_sql_fatality(std::shared_ptr<PG::result> &result)
     return PQ::resultErrorFields(result);
 }
 
-void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
+void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec)
 {
     meta.stamp_start_time();
 

@@ -571,23 +571,23 @@ namespace PQ
     inline std::vector<std::string>
     from_text_array(const std::string &input)
     {
+        // TODO: UTF-8 wierdnesses; and check Postgres' own parsing
         std::vector<std::string> result;
         int depth = 0;
         bool in_quotes = false;
-        int item_num = 0;
-        std::string::size_type start_pos = 0;
+        std::string::size_type start_pos = 1;
         std::string::size_type end_pos = 0;
+        std::string::size_type next_start_pos = 0;
 
         assert(input.at(0) == '{');
         assert(input.back() == '}');
 
-        for (std::string::size_type i = 0; i < input.size(); ++i)
+        for (std::string::size_type i = 0; i < input.size();)
         {
             if (input.at(i) == '{' && not in_quotes)
             {
                 if (++depth == 1)
                 {
-                    item_num++;
                     start_pos = i+1;
                 }
             }
@@ -596,18 +596,21 @@ namespace PQ
                 if (depth-- == 1 && end_pos == 0)
                 {
                     end_pos = i-1;
+                    next_start_pos = 0;
                 }
             }
             else if (input.at(i) == ',' && not in_quotes)
             {
                 end_pos = i-1;
+                next_start_pos = i+1;
             }
-            // We don't have to worry about `i-1 < 0`, because `input.at(i) == '{'`.
+            // We don't have to worry about `i-1 < 0`, because `input.at(0) == '{'`.
             else if (input.at(i) == '"' && input.at(i-1) != '\\')
             {
                 if (in_quotes)
                 {
                     end_pos = i-1;
+                    next_start_pos = i+2;
                     in_quotes = false;
                 }
                 else
@@ -617,12 +620,18 @@ namespace PQ
                 }
             }
 
-            if (start_pos > 0 && end_pos > 0)
+            if (start_pos > 0 and end_pos > 0)
             {
                 result.push_back(input.substr(start_pos, end_pos-start_pos+1));
-                start_pos = i+1;
+
+                if (next_start_pos == 0) break;
+
                 end_pos = 0;
+                start_pos = next_start_pos;
+                i = start_pos;
             }
+            else
+                i++;
         }
 
         return result;
@@ -734,6 +743,83 @@ namespace PQ
         return composite_value;
     }
 
+    inline std::vector<std::optional<std::string>>
+    from_text_composite_value(const std::string &input)
+    {
+        std::vector<std::optional<std::string>> result;
+        int depth = 0;
+        bool in_quotes = false;
+        int item_num = 0;
+        std::string::size_type start_pos = 0;
+        std::string::size_type end_pos = 0;
+
+        assert(input.at(0) == '(');
+        assert(input.back() == ')');
+
+        for (std::string::size_type i = 0; i < input.size(); ++i)
+        {
+            if (input.at(i) == '(' && not in_quotes)
+            {
+                if (++depth == 1)
+                {
+                    item_num++;
+                    start_pos = i+1;
+                }
+            }
+            else if (input.at(i) == ')' && not in_quotes)
+            {
+                if (depth-- == 1 && end_pos == 0)
+                {
+                    end_pos = i-1;
+                }
+            }
+            else if (input.at(i) == ',' && not in_quotes)
+            {
+                end_pos = i-1;
+            }
+            // We don't have to worry about `i-1 < 0`, because `input.at(i) == '{'`.
+            else if (input.at(i) == '"' && input.at(i-1) != '\\')
+            {
+                if (in_quotes)
+                {
+                    end_pos = i-1;
+                    in_quotes = false;
+                }
+                else
+                {
+                    start_pos = i+1;
+                    in_quotes = true;
+                }
+            }
+
+            if (start_pos > 0 && end_pos > 0)
+            {
+                if (end_pos == start_pos + 1)
+                    result.push_back({});
+                else
+                    result.push_back(input.substr(start_pos, end_pos-start_pos+1));
+                start_pos = i+1;
+                end_pos = 0;
+            }
+        }
+
+        return result;
+    }
+
+    inline std::string
+    unescape_hstore_text(const std::string &escaped)
+    {
+        std::string unescaped("");
+        for (std::string::size_type i = 0; i < escaped.size(); ++i)
+        {
+            // Skip past the escape character, unless it is the _escaped_ escaped character itself.
+            if (escaped[i] == '\\' and (i == 0 or escaped[i-1] != '\\')) i++;
+
+            unescaped.push_back(escaped[i]);
+        }
+        return unescaped;
+    }
+
     /**
      * Parse Postgres `hstore` string to an `unordered_map` of each item in the `hstore`.
      */
@@ -771,7 +857,7 @@ namespace PQ
                     else if (val_end == 0)
                     {
                         val_end = i-1;
-                        result[input.substr(key_start, key_end-key_start)] = input.substr(val_start, val_end-val_start);
+                        result[input.substr(key_start, key_end-key_start+1)] = unescape_hstore_text(input.substr(val_start, val_end-val_start+1));
                         key_start = key_end = val_start = val_end = 0;
                     }
                 }

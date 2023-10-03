@@ -27,6 +27,7 @@ public:
     std::optional<std::string> queue_notify_channel;
     int queue_reselect_interval_msec;
     std::optional<int> queue_reselect_randomized_every_nth;
+    double queue_cmd_timeout_sec;
     std::string ansi_fg;
 
     CmdQueue() = default;

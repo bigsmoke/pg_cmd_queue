@@ -13,11 +13,12 @@ add_executable(pg_cmdqd
     utils.h utils.cpp
     logger.h logger.cpp
     pq-raii/libpq-raii.hpp
+    pq_cmdqd_utils.h pq_cmdqd_utils.cpp
     fdguard.h fdguard.cpp
     pipefds.h pipefds.cpp
     cmdqueue.h cmdqueue.cpp
     cmdqueuerunner.h
-    cmdqueuerunnercollection.h cmdqueuerunnercollection.cpp
+    cmdqueuerunnermanager.h cmdqueuerunnermanager.cpp
     queuecmdmetadata.h queuecmdmetadata.cpp
     nixqueuecmd.h nixqueuecmd.cpp
     sqlqueuecmd.h sqlqueuecmd.cpp

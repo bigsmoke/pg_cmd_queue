@@ -20,6 +20,7 @@ const std::string CmdQueue::SELECT_STMT = R"SQL(
         ,queue_notify_channel
         ,extract('epoch' from queue_reselect_interval) * 10^3 as queue_reselect_interval_msec
         ,queue_reselect_randomized_every_nth
+        ,extract('epoch' from queue_cmd_timeout) as queue_cmd_timeout_sec
         ,color.ansi_fg
     FROM
         cmdq.cmd_queue
@@ -54,6 +55,9 @@ CmdQueue::CmdQueue(std::shared_ptr<PG::result> &result, int row_number, const st
             std::string queue_reselect_randomized_every_nth = PQgetvalue(result->get(), row_number, field_numbers.at("queue_reselect_randomized_every_nth"));
             this->queue_reselect_randomized_every_nth = std::stoi(queue_reselect_randomized_every_nth);
         }
+
+        std::string queue_cmd_timeout_sec = PQgetvalue(result->get(), row_number, field_numbers.at("queue_cmd_timeout_sec"));
+        this->queue_cmd_timeout_sec = std::stod(queue_cmd_timeout_sec);
 
         ansi_fg = PQgetvalue(result->get(), row_number, field_numbers.at("ansi_fg"));
 

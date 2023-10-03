@@ -33,24 +33,32 @@ pidfd_open(pid_t pid, unsigned int flags)
    return syscall(__NR_pidfd_open, pid, flags);
 }
 
-const std::string NixQueueCmd::SELECT_TEMPLATE = R"SQL(
-    SELECT
-        queue_cmd_class::text as queue_cmd_class
-        ,(parse_ident(queue_cmd_class::text))[
-            array_upper(parse_ident(queue_cmd_class::text), 1)
-        ] as queue_cmd_relname
-        ,cmd_id
-        ,cmd_subid
-        ,extract(epoch from cmd_queued_since) as cmd_queued_since
-        ,cmd_argv
-        ,cmd_env
-        ,cmd_stdin
-    FROM
-        cmdq.%s
-    %s
-    FOR UPDATE SKIP LOCKED
-)SQL";
+std::string NixQueueCmd::select_stmt(const CmdQueue &cmd_queue, const std::string &order_by)
+{
+    return std::string(R"SQL(
+SELECT
+    queue_cmd_class::text AS queue_cmd_class
+    ,(parse_ident(queue_cmd_class::text))[
+        array_upper(parse_ident(queue_cmd_class::text), 1)
+    ] AS queue_cmd_relname
+    ,cmd_id
+    ,cmd_subid
+    ,extract(epoch from cmd_queued_since) AS cmd_queued_since
+    ,cmd_argv
+    ,cmd_env
+    ,convert_from(cmd_stdin, 'UTF8') AS cmd_stdin
+FROM
+    cmdq.)SQL" + cmd_queue.queue_cmd_relname /* TODO: escape relname */ + R"SQL(
+WHERE
+    cmd_runtime IS NULL
+ORDER BY
+    )SQL" + order_by + R"SQL(
+LIMIT 1
+FOR UPDATE SKIP LOCKED
+)SQL");
+}
 
+        //,convert_from(cmd_stdin, $$UTF8$$) AS cmd_stdin
 const std::string NixQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
     UPDATE
         cmdq.%s
@@ -58,24 +66,12 @@ const std::string NixQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
         cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))
         ,cmd_exit_code = $5
         ,cmd_term_sig = $6
-        ,cmd_stdout = $7
-        ,cmd_stderr = $8
+        ,cmd_stdout = convert_to($7, 'UTF8')
+        ,cmd_stderr = convert_to($8, 'UTF8')
     WHERE
         cmd_id = $1
         AND cmd_subid IS NOT DISTINCT from $2
 )SQL";
-
-std::string NixQueueCmd::select_oldest(const CmdQueue &cmd_queue)
-{
-    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "ORDER BY cmd_queued_since LIMIT 1");
-}
-
-std::string NixQueueCmd::select_random(const CmdQueue &cmd_queue)
-{
-    // If `ORDER BY random() LIMIT` turns out to be too slow we could do:
-    // `OFFSET floor(random() * (SELECT count(*) FROM <some_nix_queue_cmd>)) LIMIT 1`
-    return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "ORDER BY random() LIMIT 1");
-}
 
 /*
 std::string NixQueueCmd::select::notify(const CmdQueue &cmd_queue)
@@ -144,6 +140,7 @@ NixQueueCmd::~NixQueueCmd()
 
 std::string NixQueueCmd::cmd_line() const
 {
+    static std::regex re("^.*[ \"$?!&%#,;].*$");
     std::string line;
 
     int i = 0;
@@ -151,8 +148,7 @@ std::string NixQueueCmd::cmd_line() const
     {
         if (i++ > 0)
             line += " ";
-        // TODO: quoting if necessary
-        line += arg;
+        line += std::regex_replace(arg, re, "\"$&\"");
     }
 
     return line;
@@ -163,7 +159,17 @@ bool NixQueueCmd::cmd_succeeded() const
     return cmd_exit_code.has_value() and cmd_exit_code.value() == 0;
 }
 
-void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
+/*
+void NixQueueCmd::_run_fork_parent_logic()
+{
+}
+
+void NixQueueCmd::_run_forked_child_logic()
+{
+}
+*/
+
+void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec)
 {
     meta.stamp_start_time();
 
@@ -187,7 +193,11 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
     pid_t pid = fork();
     if (pid == -1)
     {
-        throw std::runtime_error(strerror(errno));
+        logger->log(LOG_ERROR, "fork() failed: %s", strerror(errno));
+        cmd_stdout = "";
+        cmd_stderr = formatString("fork() failed: %s", strerror(errno));
+        cmd_term_sig = SIGABRT;
+        goto set_end_time;  // Sorry, Edsgar.  // TODO: Solve with RAII wrappertje die &meta pakt
     }
 
     if (pid == 0)  // pid == 0 ⇒ We're in a forked child process
@@ -201,7 +211,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
         while ((dup2(stdout_fds.write_fd(), STDOUT_FILENO) == -1) && (errno == EINTR)) {}
         while ((dup2(stderr_fds.write_fd(), STDERR_FILENO) == -1) && (errno == EINTR)) {}
 
-        // Brute force close any open file/socket, because I don't want the child to see them.
+        // Brute force close any open file/socket, because we don't want the child to see them.
         struct rlimit rlim;
         memset(&rlim, 0, sizeof (struct rlimit));
         getrlimit(RLIMIT_NOFILE, &rlim);
@@ -216,7 +226,9 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
         // We don't have to worry about cleaning up c_argv, because execvp() will clear up all that.
 
         for (const std::pair<const std::string, std::string> &var : this->cmd_env)
+        {
             setenv(var.first.c_str(), var.second.c_str(), 1);
+        }
 
         execvp(this->cmd_argv[0].c_str(), c_argv);
 
@@ -246,7 +258,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
         fcntl(stderr_fds.read_fd(), F_SETFL, fcntl(stderr_fds.read_fd(), F_GETFL) | O_NONBLOCK);
 
         struct pollfd fds[] = {
-            { stdin_fds.write_fd(), static_cast<short>((cmd_stdin.empty() ? POLLOUT : 0) | POLLHUP | POLLERR), 0 },
+            { stdin_fds.write_fd(), static_cast<short>((cmd_stdin.empty() ? 0 : POLLOUT) | POLLHUP | POLLERR), 0 },
             { stdout_fds.read_fd(), POLLIN | POLLHUP | POLLERR, 0 },
             { stderr_fds.read_fd(), POLLIN | POLLHUP | POLLERR, 0 },
             { pid_fd.fd(), POLLIN | POLLERR, 0 },
@@ -255,57 +267,150 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
         char stdout_buf[CMDQD_PIPE_BUFFER_SIZE];
         char stderr_buf[CMDQD_PIPE_BUFFER_SIZE];
         ssize_t cum_stdin_bytes_written = 0;
+        bool tried_sigterm = false;
+        double sigterm_time;
 
-        // TODO: ignore interrupts & handle errors (close pipes, read exit code, etc)
-        // TODO: kill -9
-        int fd_count;
         while (true)
         {
-            fd_count = poll(fds, 3, 1000);
+            double now = QueueCmdMetadata::unix_timestamp();
+
+            int time_left_ms = (queue_cmd_timeout_sec - (now - meta.cmd_runtime_start)) * 1000;
+            int fd_count = poll(fds, 4, time_left_ms > 0 ? time_left_ms : 1);
             if (fd_count < 0)
             {
-                if (errno == EINTR)
-                    continue;
-                throw std::runtime_error(strerror(errno));
+                if (errno == EINTR) continue;
+                this->cmd_stderr = formatString("poll() error: %s", strerror(errno));
+                this->cmd_term_sig = SIGABRT;
+                break;
             }
+            if (fd_count == 0)
+            {
+                now = QueueCmdMetadata::unix_timestamp();
+                if (now - meta.cmd_runtime_start >= queue_cmd_timeout_sec)
+                {
+                    // Have we tried it friendly already?
+                    if (tried_sigterm)
+                    {
+                        // And given the cmd a second to shutdown gracefully?
+                        if ((now - sigterm_time) > 1)
+                        {
+                            logger->log(
+                                    LOG_ERROR,
+                                    "We tried to kill PID %i gently, %f seconds ago; now we will SIGKILL it.",
+                                    pid,
+                                    now - sigterm_time);
+                            kill(pid, SIGKILL);  // `kill -9`
+                        }
+                    }
+                    else
+                    {
+                        logger->log(
+                                LOG_ERROR,
+                                "queue_cmd_timeout of %fsec exceeded; sending SIGTERM signal to PID %i",
+                                queue_cmd_timeout_sec,
+                                pid);
+                        kill(pid, SIGTERM);
+                        tried_sigterm = true;
+                        sigterm_time = now;
+                    }
+                }
+            } // if (fd_count == 0)
             if (fd_count > 0)
             {
+                logger->log(LOG_DEBUG5, "fds[].revents: %i, %i, %i, %i", fds[0].revents, fds[1].revents, fds[2].revents, fds[3].revents);
+
                 if (fds[0].revents & POLLOUT)
                 {
+                    logger->log(LOG_DEBUG5, "cmd STDIN ready for write()");
+                    bool write_to_stdin_erred = false;
                     while (cum_stdin_bytes_written < (ssize_t)cmd_stdin.length())
                     {
+                        //logger->log(LOG_DEBUG5, "Let's write() %i bytes TO STDIN", this->cmd_stdin.length()-cum_stdin_bytes_written);
                         ssize_t stdin_bytes_written = write(
                             stdin_fds.write_fd(),
                             this->cmd_stdin.c_str()+cum_stdin_bytes_written,
                             this->cmd_stdin.length()-cum_stdin_bytes_written
                         );
-                        // TODO: Handle EINTER and other errors
+                        if (stdin_bytes_written < 0)
+                        {
+                            if (errno == EINTR) continue;
+                            this->cmd_stderr = formatString("Error during write() to cmd STDIN: %s", strerror(errno));
+                            this->cmd_term_sig = SIGABRT;
+                            write_to_stdin_erred = true;
+                            break;
+                        }
                         cum_stdin_bytes_written += stdin_bytes_written;
+                    }
+                    if (write_to_stdin_erred) break;
+                    if (cum_stdin_bytes_written == (ssize_t)cmd_stdin.length())
+                    {
+                        fds[0].events = 0;
                     }
                 }
                 if (fds[1].revents & POLLIN)
                 {
-                    // TODO: Handle EINTER
+                    logger->log(LOG_DEBUG5, "cmd STDOUT ready for read()");
+                    bool read_from_stdout_erred = false;
                     ssize_t stdout_bytes_read = 0;
                     while ((stdout_bytes_read = read(stdout_fds.read_fd(), &stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
+                    {
+                        if (stdout_bytes_read < 0)
+                        {
+                            if (errno == EINTR) continue;
+                            this->cmd_stderr = formatString("Error during read() from cmd STDOUT: %s", strerror(errno));
+                            this->cmd_term_sig = SIGABRT;
+                            read_from_stdout_erred = true;
+                            break;
+                        }
+                        logger->log(LOG_DEBUG5, "Read %i bytes from cmd STDOUT: %s", stdout_bytes_read, stdout_buf);
                         this->cmd_stdout += std::string(stdout_buf, stdout_bytes_read);
+                    }
+                    if (read_from_stdout_erred) break;
                 }
                 if (fds[2].revents & POLLIN)
                 {
-                    // TODO: Handle EINTER
+                    logger->log(LOG_DEBUG5, "cmd STDERR ready for read()");
+                    bool read_from_stderr_erred = false;
                     ssize_t stderr_bytes_read = 0;
                     while ((stderr_bytes_read = read(stderr_fds.read_fd(), &stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
+                    {
+                        if (stderr_bytes_read < 0)
+                        {
+                            if (errno == EINTR) continue;
+                            this->cmd_stderr = formatString("Error during read() from cmd STDERR: %s", strerror(errno));
+                            this->cmd_term_sig = SIGABRT;
+                            read_from_stderr_erred = true;
+                            break;
+                        }
                         this->cmd_stderr += std::string(stderr_buf, stderr_bytes_read);
+                    }
+                    if (read_from_stderr_erred) break;
+                }
+
+                if (fds[0].revents & (POLLERR | POLLHUP))
+                {
+                    //close(fds[0].fd);
+                    // The `poll()` man page says that, for STDIN, setting `fd = -1` won't make it be ignored.
+                    fds[0].events = 0;
+                    fds[0].events = 0;
+                }
+                if (fds[1].revents & (POLLERR | POLLHUP))
+                {
+                    //close(fds[1].fd);
+                    fds[1].fd = -1;
+                }
+                if (fds[2].revents & (POLLERR | POLLHUP))
+                {
+                    //close(fds[2].fd);
+                    fds[2].fd = -1;
                 }
 
                 if (fds[3].revents & POLLIN)
                 {
-                    logger->log(LOG_DEBUG5, "Child %i ended", pid);
-                    close(fds[3].fd);
+                    logger->log(LOG_DEBUG5, "Child cmd (with PID = %i) ended", pid);
+                    //close(fds[3].fd);
                     break;
                 }
-
-                // FIXME: POLLERR
             } // if (fd_count > 0)
         } // while (true)
 
@@ -364,5 +469,6 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn)
         }
     }
 
+set_end_time:
     meta.stamp_end_time();
 }

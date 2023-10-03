@@ -16,7 +16,7 @@
 #include "logger.h"
 #include "cmdqueue.h"
 #include "cmdqueuerunner.h"
-#include "cmdqueuerunnercollection.h"
+#include "cmdqueuerunnermanager.h"
 #include "nixqueuecmd.h"
 #include "sqlqueuecmd.h"
 #include "utils.h"
@@ -133,18 +133,13 @@ int main(int argc, char **argv)
         exit(2);
     }
 
-    if (!conn_str.empty())
-        logger->log(LOG_INFO, "Connecting to database: \x1b[1m%s\x1b[0m", conn_str.c_str());
-    else
-        logger->log(LOG_DEBUG1, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[0m environment variables…");
+    setenv("PGAPPNAME", basename(argv[0]), 1);
 
-    CmdQueueRunnerCollection runner_collection(conn_str);
+    CmdQueueRunnerManager manager(conn_str, explicit_queue_cmd_classes);
 
-    runner_collection.refresh_queue_list(explicit_queue_cmd_classes);  // TODO: Move call to constructor?
+    manager.listen_for_queue_list_changes();
 
-    runner_collection.listen_for_queue_list_changes();
-
-    runner_collection.join_all_threads();
+    manager.join_all_threads();
 
     return 0;
 }

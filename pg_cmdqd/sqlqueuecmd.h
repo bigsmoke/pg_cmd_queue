@@ -11,7 +11,6 @@
 
 class SqlQueueCmd
 {
-    static const std::string SELECT_TEMPLATE;
     static const std::string UPDATE_STMT_WITHOUT_RELNAME;
 
     Logger *logger = Logger::getInstance();
@@ -38,13 +37,11 @@ public:
 
     bool is_valid() const;
 
-    static std::string select_oldest(const CmdQueue &cmd_queue);
-    static std::string select_random(const CmdQueue &cmd_queue);
-    //static std::string select_notify(const CmdQueue &cmd_queue);
+    static std::string select_stmt(const CmdQueue &cmd_queue, const std::string &order_by);
     static std::string update_stmt(const CmdQueue &cmd_queue);
     std::vector<std::optional<std::string>> update_params();
 
-    void run_cmd(std::shared_ptr<PG::conn> &conn);
+    void run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec);
 };
 
 #endif // SQLQUEUECMD_H

@@ -1,32 +1,25 @@
-#include "cmdqueuerunnercollection.h"
+#include "cmdqueuerunnermanager.h"
+
+#include <signal.h>
+#include <unistd.h>
 
 #include "pq-raii/libpq-raii.hpp"
 
-CmdQueueRunnerCollection::CmdQueueRunnerCollection(const std::string &conn_str)
-    : _conn_str(conn_str)
+CmdQueueRunnerManager::CmdQueueRunnerManager(const std::string &conn_str, const std::vector<std::string> &explicit_queue_cmd_classes)
+    : _conn_str(conn_str),
+      explicit_queue_cmd_classes(explicit_queue_cmd_classes)
 {
-    static const int max_connect_retry_seconds = 60;
-    int connect_retry_seconds = 1;
-    while (true)
-    {
-        _conn = PQ::connectdb(conn_str);
-        if (PQstatus(_conn->get()) == CONNECTION_OK)
-            break;
-
-        logger->log(LOG_ERROR, "Failed to connect to database: %s", PQerrorMessage(_conn->get()));
-        logger->log(LOG_INFO, "Will retry connecting in %i seconds…", connect_retry_seconds);
-        std::this_thread::sleep_for(std::chrono::seconds(connect_retry_seconds));
-        if (connect_retry_seconds * 2 <= max_connect_retry_seconds) connect_retry_seconds *= 2;
-    }
-
-    logger->log(
-        LOG_INFO,
-        "DB connection established to \x1b[1m%s\x1b[22m on \x1b[1m%s:%s\x1b[22m as \x1b[1m%s\x1b[22m",
-        PQdb(_conn->get()), PQhost(_conn->get()), PQport(_conn->get()), PQuser(_conn->get())
-    );
+    maintain_connection(conn_str, _conn);
+    refresh_queue_list();
 }
 
-void CmdQueueRunnerCollection::refresh_queue_list(const std::vector<std::string> &explicit_queue_cmd_classes)
+bool CmdQueueRunnerManager::queue_has_runner_already(const CmdQueue &cmd_queue)
+{
+    return _nix_cmd_queue_runners.count(cmd_queue.queue_cmd_relname) > 0
+           or _sql_cmd_queue_runners.count(cmd_queue.queue_cmd_relname) > 0;
+}
+
+void CmdQueueRunnerManager::refresh_queue_list()
 {
     static const int max_retry_seconds = 60;
 
@@ -44,6 +37,7 @@ void CmdQueueRunnerCollection::refresh_queue_list(const std::vector<std::string>
         if (retry_seconds * 2 <= max_retry_seconds) retry_seconds *= 2;
     }
 
+    _new_queue_cmd_classes.clear();
     std::unordered_map<std::string, int> fieldNumbers = PQ::fnumbers(result);
     for (int i = 0; i < PQntuples(result->get()); i++)
     {
@@ -55,21 +49,32 @@ void CmdQueueRunnerCollection::refresh_queue_list(const std::vector<std::string>
             continue;
         }
 
-        this->add_runner(cmd_queue);
+        if (not queue_has_runner_already(cmd_queue))
+            this->add_runner(cmd_queue);
+        _new_queue_cmd_classes.insert(cmd_queue.queue_cmd_relname);
     }
+
+    for (const std::string &old_cmd_class : _old_queue_cmd_classes)
+        if (_new_queue_cmd_classes.count(old_cmd_class) == 0)
+            this->stop_runner(old_cmd_class);
+    _old_queue_cmd_classes = _new_queue_cmd_classes;
 }
 
-void CmdQueueRunnerCollection::listen_for_queue_list_changes()
+void CmdQueueRunnerManager::listen_for_queue_list_changes()
 {
-    std::shared_ptr<PG::result> listen_result = PQ::exec(_conn, "LISTEN cmdq");
+    std::shared_ptr<PG::result> listen_result = PQ::exec(_conn, "LISTEN cmdq");  // TODO: Get from setting wrapper
     if (PQresultStatus(listen_result->get()) != PGRES_COMMAND_OK)
     {
         logger->log(LOG_ERROR, "Failed to `LISTEN` for `NOTIFY` events on the `cmdq` channel: %s", PQerrorMessage(_conn->get()));
         return;
     }
+    logger->log(LOG_DEBUG3, "Listening to cmdq channel for changes to the `cmd_queue` table.");
+
+    // TODO: We should also emit a signal when all the threads for the currently extant queues are is_prepared()
+    kill(getppid(), SIGUSR1);  // Tell the parent process that we're ready _and_ listening.
 
     struct pollfd fds[] = {
-        { PQsocket(_conn->get()), POLLIN | POLLPRI | POLLOUT | POLLERR, 0 }
+        { PQ::socket(_conn), POLLIN | POLLPRI, 0 }
     };
 
     if (fds[0].fd < 0)
@@ -83,25 +88,30 @@ void CmdQueueRunnerCollection::listen_for_queue_list_changes()
         int fd_count = poll(fds, 1, -1);
         if (fd_count < 0)
         {
-            if (errno == EINTR)
-            {
-                continue;
-            }
+            if (errno == EINTR) continue;
+            logger->log(LOG_ERROR, "poll() failed: %s", strerror(errno));
+            return;
         }
 
-        PQconsumeInput(_conn->get());
+        PQ::consumeInput(_conn);
         while (true)
         {
             std::shared_ptr<PG::notify> notify = PQ::notifies(_conn);
             if (notify->get() == nullptr)
                 break;
+            logger->log(LOG_INFO, "Received a NOTIFY event on the `%s` channel: %s", notify->relname().c_str(), notify->extra().c_str());
+            std::vector<std::optional<std::string>> payload_fields = PQ::from_text_composite_value((notify->extra()));
+            if (payload_fields[0] == "cmd_queue" and (payload_fields[2] == "INSERT" or payload_fields[2] == "UPDATE" or payload_fields[2] == "DELETE"))
+            {
+                refresh_queue_list();
+            }
 
             PQconsumeInput(_conn->get());
         }
     }
 }
 
-void CmdQueueRunnerCollection::add_runner(const CmdQueue &cmd_queue)
+void CmdQueueRunnerManager::add_runner(const CmdQueue &cmd_queue)
 {
     if (cmd_queue.queue_signature_class == "nix_queue_cmd_template")
     {
@@ -129,7 +139,17 @@ void CmdQueueRunnerCollection::add_runner(const CmdQueue &cmd_queue)
     }
 }
 
-void CmdQueueRunnerCollection::join_all_threads()
+void CmdQueueRunnerManager::stop_runner(const std::string &queue_cmd_class)
+{
+    if (_nix_cmd_queue_runners.count(queue_cmd_class) == 1)
+        _nix_cmd_queue_runners.at(queue_cmd_class).stop_running();
+    else if (_sql_cmd_queue_runners.count(queue_cmd_class) == 1)
+        _sql_cmd_queue_runners.at(queue_cmd_class).stop_running();
+    else
+        throw std::runtime_error("Could not find runner for queue_cmd_class = '" + queue_cmd_class + "'");
+}
+
+void CmdQueueRunnerManager::join_all_threads()
 {
     for (auto &it : _nix_cmd_queue_runners)
         if (it.second.thread.joinable())

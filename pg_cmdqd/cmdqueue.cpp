@@ -61,8 +61,13 @@ CmdQueue::CmdQueue(std::shared_ptr<PG::result> &result, int row_number, const st
             this->queue_reselect_randomized_every_nth = std::stoi(queue_reselect_randomized_every_nth);
         }
 
-        std::string queue_cmd_timeout_sec = PQgetvalue(result->get(), row_number, field_numbers.at("queue_cmd_timeout_sec"));
-        this->queue_cmd_timeout_sec = std::stod(queue_cmd_timeout_sec);
+        if (not PQ::getisnull(result, row_number, field_numbers.at("queue_cmd_timeout_sec")))
+        {
+            std::string queue_cmd_timeout_sec = PQgetvalue(result->get(), row_number, field_numbers.at("queue_cmd_timeout_sec"));
+            this->queue_cmd_timeout_sec = std::stod(queue_cmd_timeout_sec);
+        }
+        else
+            this->queue_cmd_timeout_sec = 0;
 
         ansi_fg = PQgetvalue(result->get(), row_number, field_numbers.at("ansi_fg"));
 

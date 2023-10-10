@@ -278,8 +278,9 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         {
             double now = QueueCmdMetadata::unix_timestamp();
 
-            int time_left_ms = (queue_cmd_timeout_sec - (now - meta.cmd_runtime_start)) * 1000;
-            int fd_count = poll(fds, 4, time_left_ms > 0 ? time_left_ms : 1);
+            int poll_timeout = queue_cmd_timeout_sec == 0 ? -1 :
+                (queue_cmd_timeout_sec - (now - meta.cmd_runtime_start)) * 1000;
+            int fd_count = poll(fds, 4, poll_timeout);
             if (fd_count < 0)
             {
                 if (errno == EINTR) continue;

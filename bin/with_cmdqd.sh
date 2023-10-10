@@ -56,7 +56,7 @@ receive_sigusr2() {
 }
 
 export PGDATABASE="contrib_regression"
-"$CMDQD_BIN" --log-level LOG_DEBUG5 &
+"$CMDQD_BIN" --emit-sigusr1-when-ready --log-level LOG_DEBUG5 &
 cmdqd_pid=$!
 
 trap clean_exit EXIT

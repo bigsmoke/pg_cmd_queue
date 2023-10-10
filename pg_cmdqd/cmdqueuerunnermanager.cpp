@@ -5,8 +5,12 @@
 
 #include "pq-raii/libpq-raii.hpp"
 
-CmdQueueRunnerManager::CmdQueueRunnerManager(const std::string &conn_str, const std::vector<std::string> &explicit_queue_cmd_classes)
+CmdQueueRunnerManager::CmdQueueRunnerManager(
+        const std::string &conn_str,
+        const bool emit_sigusr1_when_ready,
+        const std::vector<std::string> &explicit_queue_cmd_classes)
     : _conn_str(conn_str),
+      emit_sigusr1_when_ready(emit_sigusr1_when_ready),
       explicit_queue_cmd_classes(explicit_queue_cmd_classes)
 {
     maintain_connection(conn_str, _conn);
@@ -70,8 +74,12 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
     }
     logger->log(LOG_DEBUG3, "Listening to cmdq channel for changes to the `cmd_queue` table.");
 
-    // TODO: We should also emit a signal when all the threads for the currently extant queues are is_prepared()
-    kill(getppid(), SIGUSR1);  // Tell the parent process that we're ready _and_ listening.
+    // TODO: We should actual emit this signal when all the threads for the currently extant queues are is_prepared()
+    if (emit_sigusr1_when_ready and not _emitted_sigusr1_yet)
+    {
+        kill(getppid(), SIGUSR1);  // Tell the parent process that we're ready _and_ listening.
+        _emitted_sigusr1_yet = true;
+    }
 
     struct pollfd fds[] = {
         { PQ::socket(_conn), POLLIN | POLLPRI, 0 }
@@ -101,7 +109,8 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
                 break;
             logger->log(LOG_INFO, "Received a NOTIFY event on the `%s` channel: %s", notify->relname().c_str(), notify->extra().c_str());
             std::vector<std::optional<std::string>> payload_fields = PQ::from_text_composite_value((notify->extra()));
-            if (payload_fields[0] == "cmd_queue" and (payload_fields[2] == "INSERT" or payload_fields[2] == "UPDATE" or payload_fields[2] == "DELETE"))
+            // TODO: replicate parsing logic from cmdqueuerunner.h
+            if (payload_fields.at(0) == "cmd_queue" and (payload_fields.at(2) == "INSERT" or payload_fields.at(2) == "UPDATE" or payload_fields.at(2) == "DELETE"))
             {
                 refresh_queue_list();
             }
@@ -151,6 +160,7 @@ void CmdQueueRunnerManager::stop_runner(const std::string &queue_cmd_class)
 
 void CmdQueueRunnerManager::join_all_threads()
 {
+    // TODO: Strictly speaking not an iterator, but a pair.
     for (auto &it : _nix_cmd_queue_runners)
         if (it.second.thread.joinable())
             it.second.thread.join();

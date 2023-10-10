@@ -21,6 +21,8 @@
 #include "sqlqueuecmd.h"
 #include "utils.h"
 
+// TODO: rename this file
+
 void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
 {
     stream << "Usage:" << std::endl
@@ -77,6 +79,7 @@ int main(int argc, char **argv)
     std::vector<std::string> explicit_queue_cmd_classes;
 
     std::string conn_str;
+    bool emit_sigusr1_when_ready = false;
 
     try
     {
@@ -120,6 +123,7 @@ int main(int argc, char **argv)
             }
             else if (std::string(argv[i]) == "--emit-sigusr1-when-ready")
             {
+                emit_sigusr1_when_ready = true;
             }
             else if (i == argc - 1)
             {
@@ -139,7 +143,7 @@ int main(int argc, char **argv)
 
     setenv("PGAPPNAME", basename(argv[0]), 1);
 
-    CmdQueueRunnerManager manager(conn_str, explicit_queue_cmd_classes);
+    CmdQueueRunnerManager manager(conn_str, emit_sigusr1_when_ready, explicit_queue_cmd_classes);
 
     manager.listen_for_queue_list_changes();
 

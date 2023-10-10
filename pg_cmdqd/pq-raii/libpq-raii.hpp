@@ -537,6 +537,12 @@ namespace PQ
         return getvalue(res, row_number, column_number);
     }
 
+    inline bool
+    getisnull(const std::shared_ptr<PG::result> &res, int row_number, int column_number)
+    {
+        return PQgetisnull(res->get(), row_number, column_number) == 1;
+    }
+
     inline std::optional<std::string>
     getnullable(const std::shared_ptr<PG::result> &res, int row_number, int column_number)
     {

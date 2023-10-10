@@ -2,3 +2,5 @@ regression.diffs
 regression.out
 results/*
 *.zip
+temp-instance
+log

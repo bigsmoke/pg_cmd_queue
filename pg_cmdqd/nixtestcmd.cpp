@@ -12,11 +12,13 @@
 const std::string USAGE = R"(
 nixtestcmd
     {
-        --stderr-line |
-        --stdout-line |
+        --stderr-line <content> |
+        --stdout-line <content> |
         --echo-stdin |
         --echo-env-var <var_name> |
         --sleep-ms <msec> |
+        --ignore-sigterm |
+        --ignore-sigint |
         --close-stdin |
         --close-stdout |
         --close-stderr |
@@ -115,6 +117,14 @@ int main(int argc, char** argv)
                     throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
                 int msec = std::stoi(argv[++i]);
                 std::this_thread::sleep_for(std::chrono::milliseconds(msec));
+            }
+            else if (arg == "--ignore-sigterm")
+            {
+                sigignore(SIGTERM);
+            }
+            else if (arg == "--ignore-sigint")
+            {
+                sigignore(SIGINT);
             }
             else throw CmdLineParseError(std::string("Unrecognized argument: '") + argv[i] + "'");
         }

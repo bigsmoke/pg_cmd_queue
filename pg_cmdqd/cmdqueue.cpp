@@ -10,20 +10,22 @@ const std::string CmdQueue::CMD_QUEUE_RELNAME = "cmd_queue";
 
 const std::string CmdQueue::SELECT_STMT = R"SQL(
     SELECT
-        (parse_ident(queue_cmd_class::regclass::text))[
-            array_upper(parse_ident(queue_cmd_class::regclass::text), 1)
-        ] as queue_cmd_relname
-        ,(parse_ident(queue_signature_class::regclass::text))[
-            array_upper(parse_ident(queue_signature_class::regclass::text), 1)
-        ] as queue_signature_class
-        ,queue_runner_role::text
-        ,queue_notify_channel
-        ,extract('epoch' from queue_reselect_interval) * 10^3 as queue_reselect_interval_msec
-        ,queue_reselect_randomized_every_nth
-        ,extract('epoch' from queue_cmd_timeout) as queue_cmd_timeout_sec
+        r.relname AS queue_cmd_relname
+        ,r.relnamespace::regnamespace::text || '.' || quote_ident(r.relname) AS queue_cmd_class_qualified
+        ,(parse_ident(q.queue_signature_class::regclass::text))[
+            array_upper(parse_ident(q.queue_signature_class::regclass::text), 1)
+        ] AS queue_signature_class
+        ,q.queue_runner_role::text
+        ,q.queue_notify_channel
+        ,extract('epoch' from q.queue_reselect_interval) * 10^3 AS queue_reselect_interval_msec
+        ,q.queue_reselect_randomized_every_nth
+        ,extract('epoch' from q.queue_cmd_timeout) AS queue_cmd_timeout_sec
         ,color.ansi_fg
     FROM
-        cmdq.cmd_queue
+        cmdq.cmd_queue as q
+    INNER JOIN
+        pg_catalog.pg_class as r
+        ON r.oid = q.queue_cmd_class
     CROSS JOIN LATERAL
         cmdq.queue_cmd_class_color(queue_cmd_class) as color
     WHERE
@@ -41,6 +43,9 @@ CmdQueue::CmdQueue(std::shared_ptr<PG::result> &result, int row_number, const st
     try
     {
         queue_cmd_relname = PQgetvalue(result->get(), row_number, field_numbers.at("queue_cmd_relname"));
+        queue_cmd_class_qualified = PQgetvalue(result->get(),
+                                               row_number,
+                                               field_numbers.at("queue_cmd_class_qualified"));
         queue_signature_class = PQgetvalue(result->get(), row_number, field_numbers.at("queue_signature_class"));
 
         queue_runner_role = PQ::getnullable(result, row_number, field_numbers.at("queue_runner_role"));

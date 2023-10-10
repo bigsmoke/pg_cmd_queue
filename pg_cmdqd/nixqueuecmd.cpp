@@ -33,7 +33,10 @@ pidfd_open(pid_t pid, unsigned int flags)
    return syscall(__NR_pidfd_open, pid, flags);
 }
 
-std::string NixQueueCmd::select_stmt(const CmdQueue &cmd_queue, const std::string &order_by)
+std::string NixQueueCmd::select_stmt(
+        const CmdQueue &cmd_queue,
+        const std::optional<std::string> &where,
+        const std::optional<std::string> &order_by)
 {
     return std::string(R"SQL(
 SELECT
@@ -50,15 +53,16 @@ SELECT
 FROM
     cmdq.)SQL" + cmd_queue.queue_cmd_relname /* TODO: escape relname */ + R"SQL(
 WHERE
-    cmd_runtime IS NULL
+    cmd_runtime IS NULL)SQL" + ( where ? R"SQL(
+    AND )SQL" + where.value() : "") + R"SQL(
+)SQL" + (order_by ? R"SQL(
 ORDER BY
-    )SQL" + order_by + R"SQL(
+    )SQL" + order_by.value() : "") + R"SQL(
 LIMIT 1
 FOR UPDATE SKIP LOCKED
 )SQL");
 }
 
-        //,convert_from(cmd_stdin, $$UTF8$$) AS cmd_stdin
 const std::string NixQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
     UPDATE
         cmdq.%s
@@ -292,6 +296,8 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                     if (tried_sigterm)
                     {
                         // And given the cmd a second to shutdown gracefully?
+                        // XXX: We could probably do this more gracefully, via the event loop's `poll()` timeout,
+                        //      taking the std::min() of the `queue_cmd_timeout_sec` and `now - sigterm_time`.
                         if ((now - sigterm_time) > 1)
                         {
                             logger->log(

@@ -6,7 +6,10 @@
 #include "pq-raii/libpq-raii.hpp"
 #include "utils.h"
 
-std::string SqlQueueCmd::select_stmt(const CmdQueue &cmd_queue, const std::string &order_by)
+std::string SqlQueueCmd::select_stmt(
+        const CmdQueue &cmd_queue,
+        const std::optional<std::string> &where,
+        const std::optional<std::string> &order_by)
 {
     return std::string(R"SQL(
 SELECT
@@ -21,9 +24,11 @@ SELECT
 FROM
     cmdq.)SQL" + cmd_queue.queue_cmd_relname /* TODO: escape relname */ + R"SQL(
 WHERE
-    cmd_runtime IS NULL
+    cmd_runtime IS NULL)SQL" + ( where ? R"SQL(
+    AND )SQL" + where.value() : "") + R"SQL(
+)SQL" + (order_by ? R"SQL(
 ORDER BY
-    )SQL" + order_by + R"SQL(
+    )SQL" + order_by.value() : "") + R"SQL(
 LIMIT 1
 FOR UPDATE SKIP LOCKED
 )SQL");

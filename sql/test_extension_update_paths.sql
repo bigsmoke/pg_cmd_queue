@@ -20,7 +20,7 @@ select
 \o
 
 \set SHOW_CONTEXT 'errors'
-\set ON_ERROR_STOP
+\unset ON_ERROR_STOP
 
 -- We put the `psql` variables into a temporary table, so that we can read them out from within the
 -- PL/pgSQL`DO` block, as we cannot access these variables from within PL/pgSQL.
@@ -114,8 +114,12 @@ begin
                 and pg_proc.prokind in ('f', 'p')
             loop
                 raise notice '%', _test_proc;
+                -- TODO: Make this dynamic again, but probably via a build step, because `EXECUTE`
+                --       doesn't let through transaction control commands
                 --execute _test_proc;
-                call cmdq.test__pg_cmdqd();
+                call cmdq.test_integration__pg_cmdqd('setup');
+                call cmdq.test_integration__pg_cmdqd('test');
+                call cmdq.test_integration__pg_cmdqd('teardown');
             end loop;
 
             raise notice '%', _drop_extension;

@@ -38,6 +38,7 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << "Options:" << std::endl
         << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
         << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated." << std::endl
+        << "    \x1b[1m--emit-sigusr1-when-ready\x1b[22m" << std::endl
         << std::endl;
 }
 
@@ -116,6 +117,9 @@ int main(int argc, char **argv)
                 if (i == argc-1)
                     throw CmdLineParseError("Missing \x1b[1m<queue_cmd_class>\x1b[22m argument to \x1b[1m--cmd-queue\x1b[22m option.");
                 explicit_queue_cmd_classes.emplace_back(argv[++i]);
+            }
+            else if (std::string(argv[i]) == "--emit-sigusr1-when-ready")
+            {
             }
             else if (i == argc - 1)
             {

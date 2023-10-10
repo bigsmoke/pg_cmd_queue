@@ -106,7 +106,7 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
                 refresh_queue_list();
             }
 
-            PQconsumeInput(_conn->get());
+            PQ::consumeInput(_conn);
         }
     }
 }

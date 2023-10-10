@@ -281,6 +281,70 @@ create function pg_cmd_queue_notify_channel()
 
 --------------------------------------------------------------------------------------------------------------
 
+create function pg_cmd_queue_search_path()
+    returns text
+    stable
+    leakproof
+    parallel safe
+    language sql
+    return (
+        with recursive recursive_requirement as (
+            select
+                a.name as extension_name
+                ,v.requires as required_extensions
+                ,v.schema as schema_name
+                ,0 as dependency_depth
+            from
+                pg_catalog.pg_available_extensions as a
+            inner join
+                pg_catalog.pg_available_extension_versions as v
+                on v.name = a.name
+                and v.version = a.default_version
+            where
+                a.name = 'pg_cmd_queue'
+            union all
+            select
+                e.extname as extension_name
+                ,v.requires as required_extensions
+                ,e.extnamespace::regnamespace::name as schema_name
+                ,r.dependency_depth + 1
+            from
+                recursive_requirement as r
+            cross join lateral
+                unnest(r.required_extensions) as required(extension_name)
+            inner join
+                pg_catalog.pg_extension as e
+                on e.extname = required.extension_name
+            inner join
+                pg_catalog.pg_available_extension_versions as v
+                on v.name = e.extname
+                and v.version = e.extversion
+            where
+                r.required_extensions is not null
+        )
+        select
+            string_agg(r.schema_name, ', ' order by r.dependency_depth)
+                || ', pg_catalog, pg_temp'  -- To make the implicit explit.
+        from
+            recursive_requirement as r
+    );
+
+comment on function pg_cmd_queue_search_path() is
+$md$Determing the `search_path` for within extension scripts similar to how `CREATE EXTENSION` would set it.
+
+This allows us to easily set the `search_path` correctly when we are outside
+the context of `CREATE EXTENSION`, for example:
+
+1. when debugging a `.sql` script using `bin/debug-extension.sh`, or
+2. while running testcases.
+$md$;
+
+-- Allow us to find the `cmdq` schema as well as the schema in which our dependencies (i.e., `hstore`) are
+-- installed in.
+\echo if_debug select set_config('search_path', pg_cmd_queue_search_path(), true);
+
+--------------------------------------------------------------------------------------------------------------
+
 create table cmd_queue (
     queue_cmd_class regclass
         primary key
@@ -424,6 +488,16 @@ create function cmd_queue__notify_daemon_of_changes()
     as $$
 declare
     _channel text := pg_cmd_queue_notify_channel();
+    _queue_cmd_identity text := (
+        select
+            i.identity
+        from
+            pg_identify_object(
+                'pg_class'::regclass
+                ,coalesce(NEW.queue_cmd_class, OLD.queue_cmd_class)
+                ,0
+            ) as i
+    );
 begin
     assert tg_when = 'AFTER';
     assert tg_op in ('INSERT', 'UPDATE', 'DELETE');
@@ -431,7 +505,7 @@ begin
     assert tg_table_schema = 'cmdq';
     assert tg_table_name = 'cmd_queue';
 
-    perform pg_notify(_channel, row(tg_table_name, NEW.queue_cmd_class::text, tg_op)::text);
+    perform pg_notify(_channel, row(tg_table_name, _queue_cmd_identity, tg_op)::text);
 
     return null;
 end;
@@ -598,9 +672,9 @@ declare
         nullif(current_setting('pg_cmd_queue.notify_channel', true), '')
         ,'cmdq'
     );
-    _queue_cmd_relname name := tg_table_name;
-    _cmd_id_expression name := '(cmd_id)::text';
-    _cmd_subid_expression name := '(cmd_subid)::text';
+    _queue_cmd_class_qualified text := quote_ident(tg_table_schema) || '.' || quote_ident(tg_table_name);
+    _cmd_id_expression name := '($1).cmd_id::text';
+    _cmd_subid_expression name := '($1).cmd_subid::text';
     _cmd_id text;
     _cmd_subid text;
 begin
@@ -611,15 +685,15 @@ begin
            or tg_table_name != 'cmdq' and tg_nargs between 0 and 4;
 
     if tg_nargs > 0 then
-        _queue_notify_channel := coalesce(nullif(upper(tg_argv[0]), 'DEFAULT'), _queue_notify_channel);
+        _queue_notify_channel := coalesce(nullif(tg_argv[0], 'DEFAULT'), _queue_notify_channel);
     end if;
     if tg_nargs > 1 then
-        _queue_cmd_relname := coalesce(nullif(upper(tg_argv[1]), 'DEFAULT'), _queue_cmd_relname);
+        _queue_cmd_class_qualified := coalesce(nullif(tg_argv[1], 'DEFAULT'), _queue_cmd_class_qualified);
     end if;
     if tg_nargs > 2 then
         _cmd_id_expression := case
             when upper(tg_argv[2]) = 'DEFAULT' then
-                '(cmd_id)::text'
+                _cmd_id_expression
             when tg_argv[2] ~ '^\(.*\)::text$' then
                 regexp_replace(tg_argv[2], '(?:OLD|NEW)\.', '($1).')
             else
@@ -629,7 +703,7 @@ begin
     if tg_nargs > 3 then
         _cmd_subid_expression := case
             when upper(tg_argv[3]) = 'DEFAULT' then
-                '(cmd_subid)::text'
+                _cmd_subid_expression
             when tg_argv[3] ~ '^\(.*\)::text$' then
                 regexp_replace(tg_argv[3], '(?:OLD|NEW)\.', '($1).')
             else
@@ -645,7 +719,7 @@ begin
         execute 'SELECT ' || _cmd_subid_expression using OLD into _cmd_subid;
     end if;
 
-    perform pg_notify(_queue_notify_channel, row(_queue_cmd_relname, _cmd_id, _cmd_subid)::text);
+    perform pg_notify(_queue_notify_channel, row(_queue_cmd_class_qualified, _cmd_id, _cmd_subid)::text);
 
     return null;
 end;
@@ -715,7 +789,7 @@ begin
 
     execute format('INSERT INTO %s VALUES (($1).*)', _other_relid) using NEW;
 
-    return null;
+    return NEW;
 end;
 $$;
 
@@ -741,7 +815,7 @@ begin
 
     execute format(
         'DELETE FROM %s WHERE cmd_id = ($1).%I and cmd_subid IS NOT DISTINCT FROM ($1).%I'
-        ,tg_relid
+        ,tg_relid::regclass::text
         ,_cmd_id_field
         ,_cmd_subid_field
     ) using OLD;
@@ -838,6 +912,21 @@ create trigger no_insert
     on nix_queue_cmd_template
     for each row
     execute function queue_cmd_template__no_insert();
+
+--------------------------------------------------------------------------------------------------------------
+
+create function nix_queue_cmd(anynonarray)
+    returns nix_queue_cmd_template
+    immutable
+    leakproof
+    parallel safe
+    set search_path from current
+    language plpgsql
+    as $$
+begin
+    return null::nix_queue_cmd_template #= hstore($1);
+end;
+$$;
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -1388,146 +1477,172 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create procedure set_test_local_settings()
+create procedure assert_queue_cmd_run_result(
+        cmd_log_class$ regclass
+        ,expect$ nix_queue_cmd_template
+        ,cmdqd_timeout$ interval = '10 seconds'::interval
+    )
     language plpgsql
     as $$
+declare
+    _wait_start timestamptz := clock_timestamp();
+    _actual record;
+    _errors text[] = array[]::text[];
+    _cmd_log_ident text := cmd_log_class$::regclass::text;
 begin
-    set local plpgsql.check_asserts to true;
+    <<wait_for_cmdqd>>
+    loop
+        rollback and chain;  -- Because otherwise, we won't see the changes made by the `pg_cmdqd`
 
-    -- This just establishes the default `search_path` as should normally be set by `CREATE EXTENSION`, so
-    -- that we can seperately debug this script (with line numbers!) with the help of `debug-extension.sh`.
-    perform (
-        with recursive recursive_requirement as (
-            select
-                a.name as extension_name
-                ,v.requires as required_extensions
-                ,v.schema as schema_name
-                ,0 as dependency_depth
-            from
-                pg_catalog.pg_available_extensions as a
-            inner join
-                pg_catalog.pg_available_extension_versions as v
-                on v.name = a.name
-                and v.version = a.default_version
-            where
-                a.name = 'pg_cmd_queue'
-            union all
-            select
-                e.extname as extension_name
-                ,v.requires as required_extensions
-                ,e.extnamespace::regnamespace::name as schema_name
-                ,r.dependency_depth + 1
-            from
-                recursive_requirement as r
-            cross join lateral
-                unnest(r.required_extensions) as required(extension_name)
-            inner join
-                pg_catalog.pg_extension as e
-                on e.extname = required.extension_name
-            inner join
-                pg_catalog.pg_available_extension_versions as v
-                on v.name = e.extname
-                and v.version = e.extversion
-            where
-                r.required_extensions is not null
-        )
-        select
-            set_config(
-                'search_path'
-                ,string_agg(r.schema_name, ', ' order by r.dependency_depth)
-                    || ', pg_catalog, pg_temp'  -- Make the implicit explit.
-                ,true
+        execute format($sql$
+            SELECT
+                *
+            FROM
+                %s
+            WHERE
+                cmd_runtime IS NOT NULL
+                AND cmd_id = ($1).cmd_id
+                AND cmd_subid IS NOT DISTINCT FROM ($1).cmd_subid
+            $sql$, _cmd_log_ident
+        ) into _actual using expect$;
+
+        exit wait_for_cmdqd when _actual.cmd_runtime is not null;
+
+        if clock_timestamp() - _wait_start > cmdqd_timeout$ then
+            raise assert_failure using message = format(
+                'Waited > %s for pg_cmdqd to run %s', cmdqd_timeout$, expect$.cmd_id
+            );
+        end if;
+        perform pg_sleep(0.001);  -- seconds
+    end loop wait_for_cmdqd;
+
+    if _actual.cmd_exit_code is distinct from expect$.cmd_exit_code then
+        _errors := _errors || format('cmd_exit_code = %s ≠ %s', _actual.cmd_exit_code, expect$.cmd_exit_code);
+    end if;
+    if _actual.cmd_term_sig is distinct from expect$.cmd_term_sig then
+        _errors := _errors || format(
+            'cmd_term_sig = %s ≠ %s'
+            ,coalesce(_actual.cmd_term_sig::text, 'NULL')
+            ,coalesce(expect$.cmd_term_sig::text, 'NULL')
+        );
+    end if;
+    if _actual.cmd_stdout is distinct from expect$.cmd_stdout then
+        _errors := _errors || format(E'cmd_stdout = %L\n≠ %L', convert_from(_actual.cmd_stdout, 'UTF8'), convert_from(expect$.cmd_stdout, 'UTF8'));
+    end if;
+    if _actual.cmd_stderr is distinct from expect$.cmd_stderr then
+        _errors := _errors || format(E'cmd_stderr = %L\n≠ %L', convert_from(_actual.cmd_stderr, 'UTF8'), convert_from(expect$.cmd_stderr, 'UTF8'));
+    end if;
+
+    if array_length(_errors, 1) > 0 then
+        raise assert_failure using
+            message = array_to_string(_errors, E'\n')
+            ,detail = format(
+                'WHERE cmd_id = %L AND cmd_sub_id IS NOT DISTINCT FROM %s'
+                ,(expect$).cmd_id
+                ,coalesce(quote_literal((expect$).cmd_subid), 'NULL')
             )
-        from
-            recursive_requirement as r
-    );
+            ,hint = format('cmd_runtime = %s', _actual.cmd_runtime);
+    end if;
 end;
 $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create procedure test__pg_cmdqd()
-    --set search_path from current
-    --set plpgsql.check_asserts to true
-    --set pg_pure_tests.require_extra_daemon to 'pg_cmdqd'
+create procedure test_integration__pg_cmdqd(test_stage$ text)
     language plpgsql
     as $$
 declare
     _expect record;
     _actual record;
+    _valid_test_stages constant text[] := array['setup', 'test', 'teardown'];
 begin
-    assert exists (select from pg_catalog.pg_stat_activity where application_name = 'pg_cmdqd'),
-        '`pg_cmdqd` does not appear to be connected to the database.';
-
     -- Because this procedure executes transaction control statements, we cannot attach these as `SET`
-    -- clauses to the `CREATE PROCEDURE` statement.
-    call cmdq.set_test_local_settings();
+    -- clauses to the `CREATE PROCEDURE` statement.  Let's bluntly override the session-level settings.
+    set session plpgsql.check_asserts to true;
+    set session pg_pure_tests.require_extra_daemon to 'pg_cmdqd';
+    perform set_config('search_path', cmdq.pg_cmd_queue_search_path(), false);
 
-    create table tst_nix_cmd (
-        like nix_queue_cmd_template
-            including all
-    );
-    alter table tst_nix_cmd
-        alter column queue_cmd_class set default 'tst_nix_cmd';
+    assert exists (select from pg_catalog.pg_stat_activity where application_name = 'pg_cmdqd'),
+        '`pg_cmdqd` needs to be connected to the database.';
 
-    create table tst_nix_cmd__expect (
-        like tst_nix_cmd
-            including all excluding constraints
-    );
-    create table tst_nix_cmd__actual (
-        like tst_nix_cmd
-            including all
+    assert test_stage$ = any (_valid_test_stages), format(
+        'test_stage$ = %1$L; %1$L NOT IN (%2$s)'
+        ,test_stage$
+        ,(select string_agg(quote_literal(s), ', ') from unnest(_valid_test_stages) as s)
     );
 
-    create trigger insert_elsewhere_before_update
-        before update
-        on tst_nix_cmd
-        for each row
-        execute function queue_cmd__insert_elsewhere('cmdq.tst_nix_cmd__actual');
+    if test_stage$ = 'setup' then
+        create table tst_nix_cmd (
+            like nix_queue_cmd_template
+                including all
+        );
+        alter table tst_nix_cmd
+            alter column queue_cmd_class set default 'tst_nix_cmd';
 
-    create trigger delete_after_update
-        after update
-        on tst_nix_cmd
-        for each row
-        execute function queue_cmd__delete_after_update();
+        create table tst_nix_cmd__expect (
+            like tst_nix_cmd
+                including all excluding constraints
+        );
+        create table tst_nix_cmd__actual (
+            like tst_nix_cmd
+                including all
+        );
 
-    insert into tst_nix_cmd__expect (
-        cmd_id
-        ,cmd_subid
-        ,cmd_argv
-        ,cmd_env
-        ,cmd_stdin
-        ,cmd_exit_code
-        ,cmd_term_sig
-        ,cmd_stdout
-        ,cmd_stderr
-    )
-    values (
-        'cmd-with-clean-exit'
-        ,null
-        ,array[
-            'nixtestcmd'
-            ,'--stdout-line'
-            ,'This line should be sent to STDOUT.'
-            ,'--stderr-line'
-            ,'This line is to be sent to STDERR.'
-            ,'--echo-stdin'
-            ,'--stdout-line'
-            ,'This line should be printed after the echoed STDIN.'
-            ,'--echo-env-var'
-            ,'PG_CMDQ_TST_VAR1'
-            ,'--stdout-line'
-            ,'This line should be squeezed between 2 env. variables.'
-            ,'--echo-env-var'
-            ,'PG_CMDQ_TST_VAR2'
-            ,'--exit-code'
-            ,'0'
-        ]
-        ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>"var2: with => signs, \\ and \""'::hstore
-        ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.\n'::bytea
-        ,0
-        ,null
-        ,convert_to($out$This line should be sent to STDOUT.
+        create trigger notify
+            after insert
+            on tst_nix_cmd
+            for each row
+            execute function queue_cmd__notify('tst_nix_cmd');
+
+        create trigger insert_elsewhere_before_update
+            before update
+            on tst_nix_cmd
+            for each row
+            execute function queue_cmd__insert_elsewhere('cmdq.tst_nix_cmd__actual');
+
+        create trigger delete_after_update
+            after update
+            on tst_nix_cmd
+            for each row
+            execute function queue_cmd__delete_after_update();
+
+        insert into tst_nix_cmd__expect (
+            cmd_id
+            ,cmd_subid
+            ,cmd_argv
+            ,cmd_env
+            ,cmd_stdin
+            ,cmd_exit_code
+            ,cmd_term_sig
+            ,cmd_stdout
+            ,cmd_stderr
+        )
+        values (
+            'cmd-with-clean-exit'
+            ,null
+            ,array[
+                'nixtestcmd'
+                ,'--stdout-line'
+                ,'This line should be sent to STDOUT.'
+                ,'--stderr-line'
+                ,'This line is to be sent to STDERR.'
+                ,'--echo-stdin'
+                ,'--stdout-line'
+                ,'This line should be printed after the echoed STDIN.'
+                ,'--echo-env-var'
+                ,'PG_CMDQ_TST_VAR1'
+                ,'--stdout-line'
+                ,'This line should be squeezed between 2 env. variables.'
+                ,'--echo-env-var'
+                ,'PG_CMDQ_TST_VAR2'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>"var2: with => signs, \\ and \""'::hstore
+            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.\n'::bytea
+            ,0
+            ,null
+                ,convert_to($out$This line should be sent to STDOUT.
 This STDIN should be echoed to STDOUT,
 including this 2nd line.
 This line should be printed after the echoed STDIN.
@@ -1535,122 +1650,146 @@ var1_value
 This line should be squeezed between 2 env. variables.
 var2: with => signs, \ and "
 $out$, 'UTF8')
-        ,convert_to(E'This line is to be sent to STDERR.\n', 'UTF8')
-    )
-    ,(
-        'cmd-exceeds-timeout'
-        ,null
-        ,array[
-            'nixtestcmd'
-            ,'--stdout-line'
-            ,'Line 1.'
-            ,'--sleep'
-            ,'10 seconds'
-            ,'--exit-code'
-            ,'0'
-        ]
-        ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
-        ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
-        ,null
-        ,9  -- Signal 9 = SIGKILL
-        ,convert_to(E'Line 1.\n', 'UTF8')
-        ,convert_to('', 'UTF8')
-    );
+            ,convert_to(E'This line is to be sent to STDERR.\n', 'UTF8')
+        )
+        ,(
+            'cmd-exceeds-timeout'
+            ,null
+            ,array[
+                'nixtestcmd'
+                ,'--stdout-line'
+                ,'Line 1.'
+                ,'--sleep-ms'
+                ,'10000'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
+            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+            ,null
+            --,9  -- Signal 9 = SIGKILL
+            ,15  -- Signal 15 = SIGTERM
+            ,convert_to(E'Line 1.\n', 'UTF8')
+            ,convert_to('', 'UTF8')
+        )
+        ,(
+            'cmd-1-inserted-in-queue-before-queue-is-registered'
+            ,null
+            ,array['nixtestcmd', '--stdout-line', 'A line', '--exit-code', '0']
+            ,''::hstore
+            ,''::bytea
+            ,0
+            ,null
+            ,E'A line\n'::bytea
+            ,E''::bytea
+        )
+        ,(
+            'cmd-2-inserted-in-queue-before-queue-is-registered'
+            ,null
+            ,array['nixtestcmd', '--stdout-line', 'A line, distinguishable from cmd-1''s line.', '--exit-code', '0']
+            ,''::hstore
+            ,''::bytea
+            ,0
+            ,null
+            ,E'A line, distinguishable from cmd-1''s line.\n'::bytea
+            ,E''::bytea
+        );
+    elsif test_stage$ = 'test' then
+        <<insert_in_queue_before_registering_queue>>
+        declare
+            _num_inserted int;
+        begin
+            with inserted as (
+                insert into cmdq.tst_nix_cmd
+                    (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin)
+                select
+                    e.cmd_id, e.cmd_subid, e.cmd_argv, e.cmd_env, e.cmd_stdin
+                from
+                    cmdq.tst_nix_cmd__expect as e
+                where
+                    e.cmd_id ~ '^cmd-[12]-inserted-in-queue-before-queue-is-registered$'
+                returning
+                    true
+            )
+            select count(*) from inserted into _num_inserted;
 
-    /* Maybe use this to allow testing multiple commands in parallel
-    create function tst_nix_cmd__assertion()
-        returns trigger
-        language plpgsql
-        as $plpgsql$
-    begin
-        assert tg_when = 'BEFORE';
-        assert tg_op = 'UPDATE';
-        assert tg_level = 'ROW';
-        assert tg_table_schema = 'cmdq';
-        assert tg_table_name = 'tst_nix_cmd';
+            assert _num_inserted = 2;
+        end insert_in_queue_before_registering_queue;
 
-        if OLD.cmd_id = 'cmd-with-clean-exit' then
-        end if;
+        insert into cmd_queue (
+            queue_cmd_class
+            ,queue_signature_class
+            ,queue_runner_role
+            ,queue_notify_channel
+            ,queue_reselect_interval
+            ,queue_cmd_timeout
+        )
+        values (
+            'tst_nix_cmd'
+            ,'nix_queue_cmd_template'
+            ,'cmdq_test_role'
+            ,'tst_nix_cmd'
+            ,'1 day'::interval  -- Let's make sure that we're testing the event stuff for real
+            ,'2 second'::interval
+        );
 
-        return null;
-    end;
-    $plpgsql;
-    */
-
-    insert into cmd_queue (
-        queue_cmd_class
-        ,queue_signature_class
-        ,queue_runner_role
-        ,queue_notify_channel
-        ,queue_reselect_interval
-        ,queue_cmd_timeout
-    )
-    values (
-        'tst_nix_cmd'
-        ,'nix_queue_cmd_template'
-        ,'cmdq_test_role'
-        ,'tst_nix_cmd'
-        ,'1 day'::interval  -- Let's make sure that we're testing the event stuff for real
-        ,'2 second'::interval
-    );
-
-    <<single_cmd>>
-    for _expect in select * from cmdq.tst_nix_cmd__expect loop
-    declare
-        _wait_start timestamptz;
-    begin
-        insert into cmdq.tst_nix_cmd
-            (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin)
-        values
-            (_expect.cmd_id, _expect.cmd_subid, _expect.cmd_argv, _expect.cmd_env, _expect.cmd_stdin)
-        ;
-
-        commit and chain;  -- Because otherwise, our changes will be invisible to the daemon.
-        call cmdq.set_test_local_settings();
-
-        _wait_start := clock_timestamp();
-        <<wait>>
-        loop
-            rollback and chain;  -- Because otherwise, we won't see the changes made by the `pg_cmdqd`
-            call cmdq.set_test_local_settings();
-
+        <<check_if_pre_inserted_commands_are_run>>
+        declare
+            _expect_1 record;
+            _expect_2 record;
+        begin
             select
                 *
             into
-                _actual
+                _expect_1
             from
-                tst_nix_cmd__actual
+                cmdq.tst_nix_cmd__expect
             where
-                cmd_id = _expect.cmd_id
-                and cmd_subid is not distinct from _expect.cmd_subid
+                cmd_id = 'cmd-1-inserted-in-queue-before-queue-is-registered'
             ;
-            exit wait when found;
-            if clock_timestamp() - _wait_start > '10 seconds'::interval then
-                raise assert_failure using message = format(
-                    'Waited > 10s for pg_cmdqd to run %s', _expect.cmd_id
-                );
-            end if;
-            perform pg_sleep(0.001);  -- seconds
-        end loop wait;
+            select
+                *
+            into
+                _expect_2
+            from
+                cmdq.tst_nix_cmd__expect
+            where
+                cmd_id = 'cmd-2-inserted-in-queue-before-queue-is-registered'
+            ;
 
-        assert _actual.cmd_exit_code is not distinct from _expect.cmd_exit_code,
-            format('cmd_exit_code = %s ≠ %s', _actual.cmd_exit_code, _expect.cmd_exit_code);
-        assert _actual.cmd_term_sig is not distinct from _expect.cmd_term_sig,
-            format('cmd_term_sig = %s ≠ %s', _actual.cmd_term_sig, _expect.cmd_term_sig);
-        assert _actual.cmd_stdout is not distinct from _expect.cmd_stdout,
-            format(E'cmd_stdout = %L\n≠ %L', convert_from(_actual.cmd_stdout, 'UTF8'), convert_from(_expect.cmd_stdout, 'UTF8'));
-        assert _actual.cmd_stderr is not distinct from _expect.cmd_stderr,
-            format(E'cmd_stderr = %L\n≠ %L', convert_from(_actual.cmd_stderr, 'UTF8'), convert_from(_expect.cmd_stderr, 'UTF8'));
-    end;
-    end loop single_cmd;
+            commit and chain;  -- Because otherwise, our changes will be invisible to the daemon.
 
-    <<clean>>
-    begin
+            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd(_expect_1));
+            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd(_expect_2));
+
+            delete from
+                cmdq.tst_nix_cmd__expect
+            where
+                cmd_id ~ '^cmd-[12]-inserted-in-queue-before-queue-is-registered$'
+            ;
+        end check_if_pre_inserted_commands_are_run;
+
+        <<single_cmd>>
+        for _expect in select * from cmdq.tst_nix_cmd__expect loop
+            insert into cmdq.tst_nix_cmd
+                (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin)
+            values
+                (_expect.cmd_id, _expect.cmd_subid, _expect.cmd_argv, _expect.cmd_env, _expect.cmd_stdin)
+            ;
+
+            commit and chain;  -- Because otherwise, our changes will be invisible to the daemon.
+
+            -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which commands are
+            -- moved to by the `UPDATE` triggers _on_ the actual command queue table.
+            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd(_expect));
+        end loop single_cmd;
+
+    elsif test_stage$ = 'teardown' then
+        delete from cmd_queue where queue_cmd_class = 'cmdq.tst_nix_cmd'::regclass;
         drop table tst_nix_cmd cascade;
         drop table tst_nix_cmd__actual cascade;
         drop table tst_nix_cmd__expect cascade;
-        delete from cmd_queue where queue_cmd_class = 'tst_nix_cmd';
-    end clean;
+    end if;
 end;
 $$;
 

@@ -37,8 +37,13 @@ public:
 
     bool is_valid() const;
 
-    static std::string select_stmt(const CmdQueue &cmd_queue, const std::string &order_by);
+    static std::string select_stmt(
+            const CmdQueue &cmd_queue,
+            const std::optional<std::string> &where,
+            const std::optional<std::string> &order_by);
+
     static std::string update_stmt(const CmdQueue &cmd_queue);
+
     std::vector<std::optional<std::string>> update_params();
 
     void run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec);

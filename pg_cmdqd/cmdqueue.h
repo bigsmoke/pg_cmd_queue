@@ -17,6 +17,7 @@ public:
     static const std::string SELECT_STMT;
 
     std::string queue_cmd_relname;
+    std::string queue_cmd_class_qualified;
 
     /*
      * The local part of the queue's template table name.

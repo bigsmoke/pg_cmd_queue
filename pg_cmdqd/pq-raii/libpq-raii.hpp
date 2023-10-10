@@ -87,6 +87,13 @@ namespace PG
         {
             return this->res;
         }
+
+        /*
+        inline void status_or_throw(const ExecStatusType &expectedStatus)
+        {
+            if (PQresultStatus(this->res))
+        }
+        */
     };
 
     class notify
@@ -451,6 +458,12 @@ namespace PQ
         });
     }
 
+    inline int
+    ntuples(const std::shared_ptr<PG::result> &res)
+    {
+        return PQntuples(res->get());
+    }
+
     inline std::vector<std::string>
     fnames(const std::shared_ptr<PG::result> &res)
     {
@@ -794,7 +807,7 @@ namespace PQ
 
             if (start_pos > 0 && end_pos > 0)
             {
-                if (end_pos == start_pos + 1)
+                if (end_pos == start_pos - 1)
                     result.push_back({});
                 else
                     result.push_back(input.substr(start_pos, end_pos-start_pos+1));

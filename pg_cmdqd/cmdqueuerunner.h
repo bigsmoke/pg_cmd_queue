@@ -354,6 +354,9 @@ public:
     {
         auto f = std::bind(&CmdQueueRunner<T>::_run, this);
         thread = std::thread(f);
+
+        pthread_t native = thread.native_handle();
+        pthread_setname_np(native, cmd_queue.queue_cmd_relname.substr(0, 15).c_str());
     }
 
     ~CmdQueueRunner() = default;

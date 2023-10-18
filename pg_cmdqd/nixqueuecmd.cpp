@@ -359,11 +359,12 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                     logger->log(LOG_DEBUG5, "cmd STDOUT ready for read()");
                     bool read_from_stdout_erred = false;
                     ssize_t stdout_bytes_read = 0;
-                    while ((stdout_bytes_read = read(stdout_fds.read_fd(), &stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
+                    while ((stdout_bytes_read = read(stdout_fds.read_fd(), stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) != 0)
                     {
                         if (stdout_bytes_read < 0)
                         {
                             if (errno == EINTR) continue;
+                            if (errno == EWOULDBLOCK || errno == EAGAIN) break;
                             this->cmd_stderr = formatString("Error during read() from cmd STDOUT: %s", strerror(errno));
                             this->cmd_term_sig = SIGABRT;
                             read_from_stdout_erred = true;
@@ -379,11 +380,12 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                     logger->log(LOG_DEBUG5, "cmd STDERR ready for read()");
                     bool read_from_stderr_erred = false;
                     ssize_t stderr_bytes_read = 0;
-                    while ((stderr_bytes_read = read(stderr_fds.read_fd(), &stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
+                    while ((stderr_bytes_read = read(stderr_fds.read_fd(), stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) != 0)
                     {
                         if (stderr_bytes_read < 0)
                         {
                             if (errno == EINTR) continue;
+                            if (errno == EWOULDBLOCK || errno == EAGAIN) break;
                             this->cmd_stderr = formatString("Error during read() from cmd STDERR: %s", strerror(errno));
                             this->cmd_term_sig = SIGABRT;
                             read_from_stderr_erred = true;

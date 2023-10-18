@@ -15,8 +15,7 @@ FdGuard::FdGuard(const int fd)
 
 FdGuard::~FdGuard()
 {
-    int close_result;
-    while ((close_result = close(_fd)) == -1 && errno == EINTR) {}
+    while (close(_fd) == -1 && errno == EINTR) {}
 }
 
 int FdGuard::fd() const

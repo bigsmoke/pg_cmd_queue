@@ -4,3 +4,5 @@ results/*
 *.zip
 temp-instance
 log
+*.user
+build-*

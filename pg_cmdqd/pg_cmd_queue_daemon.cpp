@@ -83,9 +83,11 @@ int main(int argc, char **argv)
 
     try
     {
-        if (std::getenv("PG_CMDQD_LOG_LEVEL") != nullptr)
+        const char *log_level = std::getenv("PG_CMDQD_LOG_LEVEL");
+        const std::string log_level_from_env(log_level ? log_level : "");
+
+        if (!log_level_from_env.empty())
         {
-            std::string log_level_from_env = std::getenv("PG_CMDQD_LOG_LEVEL");
             if (StringToLogLevel.count(log_level_from_env) == 0)
                 throw CmdLineParseError(std::string("Unrecognized log level: ") + log_level_from_env);
             logger->setLogLevel(StringToLogLevel.at(log_level_from_env));

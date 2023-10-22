@@ -13,6 +13,12 @@ CmdQueueRunnerManager::CmdQueueRunnerManager(
       emit_sigusr1_when_ready(emit_sigusr1_when_ready),
       explicit_queue_cmd_classes(explicit_queue_cmd_classes)
 {
+    sigemptyset(&_sigset_masked_in_runner_threads);
+    sigaddset(&_sigset_masked_in_runner_threads, SIGTERM);
+    sigaddset(&_sigset_masked_in_runner_threads, SIGINT);
+
+    install_signal_handlers();
+
     maintain_connection(conn_str, _conn);
     refresh_queue_list();
 }
@@ -29,7 +35,7 @@ void CmdQueueRunnerManager::refresh_queue_list()
 
     std::shared_ptr<PG::result> result;
     int retry_seconds = 1;
-    while (true)
+    while (this->_keep_running)
     {
         result = PQ::execParams(_conn, CmdQueue::SELECT_STMT, 1, {}, {PQ::as_text_array(explicit_queue_cmd_classes)});
 
@@ -91,7 +97,7 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
         return;
     }
 
-    while (true)
+    while (_keep_running)
     {
         int fd_count = poll(fds, 1, -1);
         if (fd_count < 0)
@@ -102,7 +108,7 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
         }
 
         PQ::consumeInput(_conn);
-        while (true)
+        while (_keep_running)
         {
             std::shared_ptr<PG::notify> notify = PQ::notifies(_conn);
             if (notify->get() == nullptr)
@@ -122,6 +128,13 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
 
 void CmdQueueRunnerManager::add_runner(const CmdQueue &cmd_queue)
 {
+    // The signals that we don't want the runner threads to received are first blocked here in the main
+    // thread, to avoid the race condition that a signal is received by the child thread before it had the
+    // opportunity to call `pthread_signmask()`.  We don't have to worry about the signal _not_ arriving at
+    // all while the runner thread is being spawned, because signals are queued until _some_ thread is ready
+    // to receive them.
+    sigprocmask(SIG_BLOCK, &_sigset_masked_in_runner_threads, nullptr);
+
     if (cmd_queue.queue_signature_class == "nix_queue_cmd_template")
     {
         _nix_cmd_queue_runners.emplace(
@@ -146,6 +159,8 @@ void CmdQueueRunnerManager::add_runner(const CmdQueue &cmd_queue)
             cmd_queue.queue_cmd_relname.c_str(), cmd_queue.queue_signature_class.c_str()
         );
     }
+
+    sigprocmask(SIG_UNBLOCK, &_sigset_masked_in_runner_threads, nullptr);
 }
 
 void CmdQueueRunnerManager::stop_runner(const std::string &queue_cmd_class)
@@ -167,4 +182,42 @@ void CmdQueueRunnerManager::join_all_threads()
     for (auto &it : _sql_cmd_queue_runners)
         if (it.second.thread.joinable())
             it.second.thread.join();
+}
+
+void CmdQueueRunnerManager::stop_running()
+{
+    _keep_running = false;
+}
+
+void CmdQueueRunnerManager::receive_signal(int sig)
+{
+    if (sig == SIGTERM || sig == SIGINT)
+    {
+        logger->log(LOG_INFO, "Received signal %i", sig);
+        _keep_running = false;
+        for (auto &it: _nix_cmd_queue_runners)
+            it.second.stop_running(sig);
+        for (auto &it: _sql_cmd_queue_runners)
+            it.second.stop_running(sig);
+    }
+}
+
+std::function<void(int)> cpp_signal_handler;
+
+void c_signal_handler(int sig)
+{
+    cpp_signal_handler(sig);
+}
+
+void CmdQueueRunnerManager::install_signal_handlers()
+{
+    cpp_signal_handler = std::bind(&CmdQueueRunnerManager::receive_signal,
+                                   this,
+                                   std::placeholders::_1);
+    struct sigaction sig_handler;
+    sig_handler.sa_handler = c_signal_handler;
+    sigemptyset(&sig_handler.sa_mask);
+    sig_handler.sa_flags = 0;
+    sigaction(SIGTERM, &sig_handler, NULL);
+    sigaction(SIGINT, &sig_handler, NULL);
 }

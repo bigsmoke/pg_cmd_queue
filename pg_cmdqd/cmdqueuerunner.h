@@ -7,14 +7,18 @@
 #include <stdexcept>
 #include <thread>
 
-#include "libpq-fe.h"
-#include "poll.h"
+#include <fcntl.h>
+#include <libpq-fe.h>
+#include <poll.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include "pq-raii/libpq-raii.hpp"
 #include "pq_cmdqd_utils.h"
 #include "cmdqueue.h"
 #include "logger.h"
 #include "nixqueuecmd.h"
+#include "pipefds.h"
 #include "sqlqueuecmd.h"
 #include "utils.h"
 
@@ -29,6 +33,7 @@ class CmdQueueRunner
     std::string _conn_str;
     Logger *logger = Logger::getInstance();
     bool _is_prepared = false;
+    int _received_signal = 0;
 
     void _setup_session(std::shared_ptr<PG::conn> & conn)
     {
@@ -132,7 +137,7 @@ class CmdQueueRunner
         Logger::cmd_queue = std::make_shared<CmdQueue>(_cmd_queue);  // FIXME: This makes a copy
 
         std::shared_ptr<PG::conn> conn = nullptr;
-        struct pollfd poll_fds[1];
+        struct pollfd poll_fds[2];
 
         std::unordered_map<std::string, int> selected_field_numbers;
 
@@ -140,6 +145,7 @@ class CmdQueueRunner
         {
             maintain_connection(_conn_str, conn);
             poll_fds[0] = { PQ::socket(conn), POLLIN | POLLPRI, 0 };
+            poll_fds[1] = { kill_pipe_fds.read_fd(), POLLIN | POLLPRI, 0 };
 
             _setup_session(conn);
 
@@ -318,7 +324,7 @@ class CmdQueueRunner
                     std::chrono::milliseconds reselect_wait_time_left = std::chrono::duration_cast<
                          std::chrono::milliseconds>(reselect_next_when - std::chrono::steady_clock::now());
 
-                    int fd_count = poll(poll_fds, 1, reselect_wait_time_left.count());
+                    int fd_count = poll(poll_fds, 2, reselect_wait_time_left.count());
                     if (fd_count < 0)
                     {
                         if (errno == EINTR) continue;  // We will see if `_keep_running` turned `false`.
@@ -327,30 +333,47 @@ class CmdQueueRunner
                     }
                     if (fd_count == 0)
                         break;  // Time to go back to (re)select loop
-                    logger->log(LOG_DEBUG5, "fd_count > 0");  // FIXME: remove
-                    if (not PQ::consumeInput(conn))
+                                //
+                    if (poll_fds[0].revents != 0)
                     {
-                        logger->log(LOG_ERROR, "PQconsumeInput() failed: %s", PQ::errorMessage(conn).c_str());
-                        go_back_to_reconnect_loop = true;
-                        break;  // Go back to the main (re)connect loop via the (re)select loop
+                        if (not PQ::consumeInput(conn))
+                        {
+                            logger->log(LOG_ERROR, "PQconsumeInput() failed: %s", PQ::errorMessage(conn).c_str());
+                            go_back_to_reconnect_loop = true;
+                            break;  // Go back to the main (re)connect loop via the (re)select loop
+                        }
+                        // Input consumed; `PQnotifies()` should now be able to get any pending notifications
+                        // in the next iteration of this loop.
                     }
-                    // Input consumed; `PQnotifies()` should now be able to get any pending notifications
-                    // in the next iteration of this loop.
 
+                    if (poll_fds[1].revents != 0)  // poll_fd[1].fd = kill_pipe_fds.read_fd()
+                    {
+                        logger->log(LOG_DEBUG1,
+                                    "Exiting `poll()` loop after receiving `kill(%i)` signal via pipe.",
+                                    _received_signal);
+                        assert(not _keep_running);  // Should have already been set.
+                        // Before we lay ourselves down, let's read the available bytes.
+                        const int buf_size = 4; char buf[buf_size];
+                        while (read(kill_pipe_fds.read_fd(), &buf, buf_size) > 0) {}
+                    }
                 } // PQnotify() & poll() loop
 
             } // (re)select loop
         } // (re)connect loop
+        logger->log(LOG_DEBUG5, "Exited outer/(re)connect loop");
     }
 
 public:
     std::thread thread;
 
+    PipeFds kill_pipe_fds;
+
     CmdQueueRunner() = delete;
 
     CmdQueueRunner(const CmdQueue &cmd_queue, const std::string &conn_str) :
         _cmd_queue(cmd_queue),
-        _conn_str(conn_str)
+        _conn_str(conn_str),
+        kill_pipe_fds(O_NONBLOCK)
     {
         auto f = std::bind(&CmdQueueRunner<T>::_run, this);
         thread = std::thread(f);
@@ -366,9 +389,20 @@ public:
         return _is_prepared;
     }
 
-    void stop_running()
+    void stop_running(int sig_num = 0)
     {
+        _received_signal = sig_num;
+
+        logger->log(LOG_INFO,
+                    "Requesting `%s` runner (thread) to shut down gently.",
+                    _cmd_queue.queue_cmd_class_qualified.c_str());
+
+        // Mark that this runner (its thread) has to stop running.
         this->_keep_running = false;
+
+        // Write dummy data to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
+        const char dummy_str[] = "_";
+        write(kill_pipe_fds.write_fd(), dummy_str, sizeof(dummy_str));
     }
 };
 

@@ -6,9 +6,9 @@
 
 #include <stdexcept>
 
-PipeFds::PipeFds()
+PipeFds::PipeFds(int pipe2_flags)
 {
-    if (pipe(this->fds) == -1)
+    if (pipe2(this->fds, pipe2_flags) == -1)
         throw std::runtime_error(strerror(errno));
 }
 

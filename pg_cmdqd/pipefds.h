@@ -6,7 +6,7 @@ class PipeFds
     int fds[2];
 
 public:
-    PipeFds();
+    PipeFds(int pipe2_flags = 0);
     ~PipeFds();
     int* data();
     int read_fd() const;

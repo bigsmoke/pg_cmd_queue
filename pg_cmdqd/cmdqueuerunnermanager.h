@@ -17,11 +17,14 @@ class CmdQueueRunnerManager
     Logger *logger = Logger::getInstance();
     std::string _conn_str;
     std::shared_ptr<PG::conn> _conn;
+    bool _keep_running = true;
+    sigset_t _sigset_masked_in_runner_threads;
 
 public:
     bool emit_sigusr1_when_ready = false;
     bool _emitted_sigusr1_yet = false;
     std::vector<std::string> explicit_queue_cmd_classes;
+
     CmdQueueRunnerManager() = delete;
     CmdQueueRunnerManager(
             const std::string &conn_str,
@@ -34,6 +37,13 @@ public:
     void stop_runner(const std::string &queue_cmd_class);
     void join_all_threads();
     std::vector<std::string> queue_cmd_classes();
+    void stop_running();
+    void receive_signal(int sig);
+    void install_signal_handlers();
 };
+
+extern std::function<void(int)> cpp_signal_handler;
+
+void c_signal_handler(int value);
 
 #endif // CMDQUEUERUNNERMANAGER_H

@@ -1,6 +1,7 @@
 #include "pipefds.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -8,8 +9,15 @@
 
 PipeFds::PipeFds(int pipe2_flags)
 {
-    if (pipe2(this->fds, pipe2_flags) == -1)
+    if (pipe(this->fds) == -1)
         throw std::runtime_error(strerror(errno));
+
+    if (pipe2_flags != 0) {
+        if ((fcntl(this->fds[0], F_SETFL, fcntl(this->fds[0], F_GETFL) | O_NONBLOCK)) < 0)
+            throw std::runtime_error(strerror(errno));
+        if ((fcntl(this->fds[1], F_SETFL, fcntl(this->fds[1], F_GETFL) | O_NONBLOCK)) < 0)
+            throw std::runtime_error(strerror(errno));
+    }
 }
 
 PipeFds::~PipeFds()

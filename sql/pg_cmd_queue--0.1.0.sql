@@ -1653,7 +1653,7 @@ $out$, 'UTF8')
             ,convert_to(E'This line is to be sent to STDERR.\n', 'UTF8')
         )
         ,(
-            'cmd-exceeds-timeout'
+            'cmd-exceeds-timeout-with-default-sigterm-action'
             ,null
             ,array[
                 'nixtestcmd'
@@ -1664,11 +1664,51 @@ $out$, 'UTF8')
                 ,'--exit-code'
                 ,'0'
             ]
-            ,'PG_CMDQ_TST_VAR1=>var1_value,PG_CMDQ_TST_VAR2=>var2_value'::hstore
-            ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.'::bytea
+            ,''::hstore
+            ,''::bytea
             ,null
-            --,9  -- Signal 9 = SIGKILL
             ,15  -- Signal 15 = SIGTERM
+            ,convert_to(E'Line 1.\n', 'UTF8')
+            ,convert_to('', 'UTF8')
+        )
+        ,(
+            'cmd-exceeds-timeout-but-exits-cleanly-on-sigterm'
+            ,null
+            ,array[
+                'nixtestcmd'
+                ,'--stdout-line'
+                ,'Line 1.'
+                ,'--exit-code-on-sigterm'
+                ,'15'  -- Hehehe
+                ,'--sleep-ms'
+                ,'10000'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,''::hstore
+            ,''::bytea
+            ,15
+            ,null
+            ,convert_to(E'Line 1.\n', 'UTF8')
+            ,convert_to('', 'UTF8')
+        )
+        ,(
+            'cmd-exceeds-timeout-and-ignores-sigterm'
+            ,null
+            ,array[
+                'nixtestcmd'
+                ,'--stdout-line'
+                ,'Line 1.'
+                ,'--ignore-sigterm'
+                ,'--sleep-ms'
+                ,'10000'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,''::hstore
+            ,''::bytea
+            ,null
+            ,9  -- Signal 9 = SIGKILL
             ,convert_to(E'Line 1.\n', 'UTF8')
             ,convert_to('', 'UTF8')
         )

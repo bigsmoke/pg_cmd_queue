@@ -23,15 +23,7 @@
 
 #define CMDQD_PIPE_BUFFER_SIZE 512
 
-#ifndef __NR_pidfd_open
-#define __NR_pidfd_open 434   /* System call # on most architectures */
-#endif
-
-static int
-pidfd_open(pid_t pid, unsigned int flags)
-{
-   return syscall(__NR_pidfd_open, pid, flags);
-}
+const int GRACE_SECONDS_BETWEEN_SIGTERM_AND_SIGKILL = 2;
 
 std::string NixQueueCmd::select_stmt(
         const CmdQueue &cmd_queue,
@@ -173,17 +165,26 @@ void NixQueueCmd::_run_forked_child_logic()
 }
 */
 
+void sigchld_handler(int _)
+{
+}
+
 void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec)
 {
     meta.stamp_start_time();
 
-    // TODO: Ask Wiebe: Why catch signals _before_ doing the fork?
-    /*
-    if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
-        perror("signal");
-        exit(EXIT_FAILURE);
+    static bool sigchld_handler_is_set = false;
+    if (not sigchld_handler_is_set)
+    {
+        // We will set up a dummy signal handler function for `SIGCHLD`, because all we really want is for
+        // `poll()` to return when the child process exits.
+        struct sigaction sigchld_action;
+        sigemptyset(&sigchld_action.sa_mask);
+        sigchld_action.sa_handler = sigchld_handler;
+        sigchld_action.sa_flags = 0;
+        sigaction(SIGCHLD, &sigchld_action, nullptr);
+        sigchld_handler_is_set = true;
     }
-    */
 
     logger->log(
         LOG_DEBUG3, "cmd_id = '%s'%s: \x1b[1m%s\x1b[22m",
@@ -221,6 +222,11 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         getrlimit(RLIMIT_NOFILE, &rlim);
         for (rlim_t i = 3; i < rlim.rlim_cur; ++i) close (i);
 
+        // Unset signal masks inherited from the parent process.
+        sigset_t empty_sigset;
+        sigemptyset(&empty_sigset);
+        sigprocmask(SIG_SETMASK, &empty_sigset, nullptr);
+
         std::vector<char *> argv_heads;
         argv_heads.reserve(this->cmd_argv.size() + 1);
         for (const std::string &s : cmd_argv)
@@ -249,8 +255,6 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
             (intmax_t) pid
         );
 
-        FdGuard pid_fd(pidfd_open(pid, 0));
-
         // Close the end of each pipe that we won't need in the parent process
         stdin_fds.close_read_fd();
         stdout_fds.close_write_fd();
@@ -265,7 +269,6 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
             { stdin_fds.write_fd(), static_cast<short>((cmd_stdin.empty() ? 0 : POLLOUT) | POLLHUP | POLLERR), 0 },
             { stdout_fds.read_fd(), POLLIN | POLLHUP | POLLERR, 0 },
             { stderr_fds.read_fd(), POLLIN | POLLHUP | POLLERR, 0 },
-            { pid_fd.fd(), POLLIN | POLLERR, 0 },
         };
 
         char stdout_buf[CMDQD_PIPE_BUFFER_SIZE];
@@ -274,16 +277,34 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         bool tried_sigterm = false;
         double sigterm_time;
 
+        int wstatus;
+        int res_pid = 0;
+
         while (true)
         {
-            double now = QueueCmdMetadata::unix_timestamp();
+            // Let's check if maybe we were just interrupted by a SIGCHLD signal that we're interested in.
+            // Yes, I (Rowan) am missing `pidfd_open()` on MacOS :'-(
+            if ((res_pid = waitpid(pid, &wstatus, WNOHANG)) != 0) break;
 
-            int poll_timeout = queue_cmd_timeout_sec == 0 ? -1 :
-                (queue_cmd_timeout_sec - (now - meta.cmd_runtime_start)) * 1000;
-            int fd_count = poll(fds, 4, poll_timeout);
+            double now = QueueCmdMetadata::unix_timestamp();
+            int poll_timeout;
+            if (queue_cmd_timeout_sec == 0)
+            {
+                poll_timeout = -1;
+            }
+            else
+            {
+                poll_timeout = (queue_cmd_timeout_sec
+                                - (now - meta.cmd_runtime_start)
+                                + (tried_sigterm ? GRACE_SECONDS_BETWEEN_SIGTERM_AND_SIGKILL : 0)) * 1000;
+                if (poll_timeout < 0)
+                    poll_timeout = 0;
+            }
+            int fd_count = poll(fds, 3, poll_timeout);
             if (fd_count < 0)
             {
                 if (errno == EINTR) continue;
+
                 this->cmd_stderr = formatString("poll() error: %s", strerror(errno));
                 this->cmd_term_sig = SIGABRT;
                 break;
@@ -297,9 +318,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                     if (tried_sigterm)
                     {
                         // And given the cmd a second to shutdown gracefully?
-                        // XXX: We could probably do this more gracefully, via the event loop's `poll()` timeout,
-                        //      taking the std::min() of the `queue_cmd_timeout_sec` and `now - sigterm_time`.
-                        if ((now - sigterm_time) > 1)
+                        if ((now - sigterm_time) > GRACE_SECONDS_BETWEEN_SIGTERM_AND_SIGKILL)
                         {
                             logger->log(
                                     LOG_ERROR,
@@ -307,6 +326,8 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                                     pid,
                                     now - sigterm_time);
                             kill(pid, SIGKILL);  // `kill -9`
+                            res_pid = waitpid(pid, &wstatus, 0);
+                            break;
                         }
                     }
                     else
@@ -324,7 +345,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
             } // if (fd_count == 0)
             if (fd_count > 0)
             {
-                logger->log(LOG_DEBUG5, "fds[].revents: %i, %i, %i, %i", fds[0].revents, fds[1].revents, fds[2].revents, fds[3].revents);
+                logger->log(LOG_DEBUG5, "fds[].revents: %i, %i, %i", fds[0].revents, fds[1].revents, fds[2].revents);
 
                 if (fds[0].revents & POLLOUT)
                 {
@@ -398,39 +419,29 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
 
                 if (fds[0].revents & (POLLERR | POLLHUP))
                 {
-                    //close(fds[0].fd);
                     // The `poll()` man page says that, for STDIN, setting `fd = -1` won't make it be ignored.
-                    fds[0].events = 0;
-                    fds[0].events = 0;
+                    // Luckily, we're in the parent process, and the STDIN of our child is not _our_ STDIN /
+                    // FD 0.
+                    fds[0].fd = -1;
                 }
                 if (fds[1].revents & (POLLERR | POLLHUP))
                 {
-                    //close(fds[1].fd);
                     fds[1].fd = -1;
                 }
                 if (fds[2].revents & (POLLERR | POLLHUP))
                 {
-                    //close(fds[2].fd);
                     fds[2].fd = -1;
-                }
-
-                if (fds[3].revents & POLLIN)
-                {
-                    logger->log(LOG_DEBUG5, "Child cmd (with PID = %i) ended", pid);
-                    //close(fds[3].fd);
-                    break;
                 }
             } // if (fd_count > 0)
         } // while (true)
 
-        int wstatus;
-        int res_pid = waitpid(pid, &wstatus, WNOHANG);
+        if (res_pid == 0) res_pid = waitpid(pid, &wstatus, WNOHANG);
 
         if (res_pid < 0)
         {
             this->cmd_term_sig = -1;
             this->cmd_stderr += formatString(
-                "Unexpected error while calling `waitpid(%i, &wstatus, WNOHANG)`: ''",
+                "Unexpected error while calling `waitpid(%i, &wstatus, WNOHANG)`: '%s'",
                 pid, strerror(errno)
             );
         }

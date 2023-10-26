@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+int exit_code_on_sigterm = 0;
+
 const std::string USAGE = R"(
 nixtestcmd
     {
@@ -19,6 +21,7 @@ nixtestcmd
         --sleep-ms <msec> |
         --ignore-sigterm |
         --ignore-sigint |
+        --exit-code-on-sigterm <exit_code> |
         --close-stdin |
         --close-stdout |
         --close-stderr |
@@ -40,6 +43,10 @@ public:
     }
 };
 
+void handle_sigterm(int sig)
+{
+    exit(exit_code_on_sigterm);
+}
 
 int main(int argc, char** argv)
 {
@@ -117,6 +124,19 @@ int main(int argc, char** argv)
                     throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
                 int msec = std::stoi(argv[++i]);
                 std::this_thread::sleep_for(std::chrono::milliseconds(msec));
+            }
+            else if (arg == "--exit-code-on-sigterm")
+            {
+                if (i == argc - 1)
+                    throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
+
+                exit_code_on_sigterm = std::stoi(argv[++i]);
+
+                struct sigaction sigterm_action;
+                sigemptyset(&sigterm_action.sa_mask);
+                sigterm_action.sa_handler = handle_sigterm;
+                sigterm_action.sa_flags = 0;
+                sigaction(SIGTERM, &sigterm_action, nullptr);
             }
             else if (arg == "--ignore-sigterm")
             {

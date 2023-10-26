@@ -1,7 +1,7 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-09-21 20:15:31.073847+01
+pg_readme_generated_at: 2023-10-26 12:00:52.311029+01
 pg_readme_version: 0.6.4
 ---
 
@@ -72,7 +72,7 @@ variables:
 
 | Setting name                          | Default setting  |
 | ------------------------------------- | ---------------- |
-| `pg_cmd_queue.notify_channel`         | `pgcmdq`         |
+| `pg_cmd_queue.notify_channel`         | `cmdq`           |
 
 ## Planned features for `pg_cmd_queue`
 
@@ -353,6 +353,16 @@ The `http_queue_cmd_template` table has 12 attributes:
 
 ### Routines
 
+#### Procedure: `assert_queue_cmd_run_result (regclass, nix_queue_cmd_template, interval)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `cmd_log_class$`                                                  | `regclass`                                                           |  |
+|   `$2` |       `IN` | `expect$`                                                         | `nix_queue_cmd_template`                                             |  |
+|   `$3` |       `IN` | `cmdqd_timeout$`                                                  | `interval`                                                           | `'00:00:10'::interval` |
+
 #### Function: `cmd_queue__notify_daemon_of_changes()`
 
 Function return type: `trigger`
@@ -364,6 +374,22 @@ Function-local settings:
 #### Function: `cmd_queue__queue_signature_constraint()`
 
 Function return type: `trigger`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+
+#### Function: `nix_queue_cmd (anynonarray)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `anynonarray`                                                        |  |
+
+Function return type: `nix_queue_cmd_template`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
 
 Function-local settings:
 
@@ -404,6 +430,20 @@ Function-local settings:
   *  `SET search_path TO cmdq, public, pg_temp`
   *  `SET pg_readme.include_view_definitions TO true`
   *  `SET pg_readme.include_routine_definitions_like TO {test__%}`
+
+#### Function: `pg_cmd_queue_search_path()`
+
+Determing the `search_path` for within extension scripts similar to how `CREATE EXTENSION` would set it.
+
+This allows us to easily set the `search_path` correctly when we are outside
+the context of `CREATE EXTENSION`, for example:
+
+1. when debugging a `.sql` script using `bin/debug-extension.sh`, or
+2. while running testcases.
+
+Function return type: `text`
+
+Function attributes: `STABLE`, `LEAKPROOF`, `PARALLEL SAFE`
 
 #### Function: `queue_cmd_class_color (regclass)`
 
@@ -448,6 +488,10 @@ Function return type: `trigger`
 Function-local settings:
 
   *  `SET search_path TO pg_catalog`
+
+#### Function: `queue_cmd__insert_elsewhere()`
+
+Function return type: `trigger`
 
 #### Function: `queue_cmd__notify()`
 
@@ -678,6 +722,14 @@ begin
 end;
 $procedure$
 ```
+
+#### Procedure: `test_integration__pg_cmdqd (text)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `test_stage$`                                                     | `text`                                                               |  |
 
 #### Procedure: `test__pg_cmd_queue()`
 

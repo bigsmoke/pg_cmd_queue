@@ -32,3 +32,5 @@ link_directories(pg_cmdqd ${LIBPQ_LIBRARY_DIRS})
 add_executable(nixtestcmd
     nixtestcmd.cpp
 )
+
+add_definitions(-D_POSIX_C_SOURCE=200809L)

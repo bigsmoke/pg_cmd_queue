@@ -32,14 +32,14 @@ clean_exit() {
 }
 
 receive_sigusr1() {
-    trap - SIGUSR2
     kill "$timer_pid"; timer_pid=
+    trap - SIGUSR2
     "${ARGV[@]}"
 }
 
 # The only way I could think of to make this script time out was to background a timer child process,
 # and then either:
-#   (a) let the child be killed when the previously spawned `pg_cmdqd` child process sends
+#   (a) let that child be killed when the previously spawned `pg_cmdqd` child process sends
 #       us a `SIGUSR1`, or
 #   (b) let the child emit a `SIGUSR2` signal back to the parent, which will than prompt us to
 #       initiate a clean exit (_with_ error code, mind you).

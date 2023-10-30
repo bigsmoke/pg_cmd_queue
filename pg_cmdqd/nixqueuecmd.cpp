@@ -23,7 +23,7 @@
 
 #define CMDQD_PIPE_BUFFER_SIZE 512
 
-const int GRACE_SECONDS_BETWEEN_SIGTERM_AND_SIGKILL = 2;
+const int GRACE_SECONDS_BETWEEN_SIGTERM_AND_SIGKILL = 1;
 
 std::string NixQueueCmd::select_stmt(
         const CmdQueue &cmd_queue,

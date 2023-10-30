@@ -33,4 +33,11 @@ add_executable(nixtestcmd
     nixtestcmd.cpp
 )
 
-add_definitions(-D_POSIX_C_SOURCE=200809L)
+if (APPLE)
+    set(APPLEISH TRUE)
+endif()
+if (APPLEISH OR DEFINED ENV{CMAKE_APPLEISH})
+    add_definitions(-U_GNU_SOURCE)
+endif()
+
+add_definitions(-D_XOPEN_SOURCE=700)

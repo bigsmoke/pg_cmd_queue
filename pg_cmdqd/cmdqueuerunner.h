@@ -406,7 +406,7 @@ public:
 
         // Write dummy data to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
         const char dummy_str[] = "_";
-        write(kill_pipe_fds.write_fd(), dummy_str, sizeof(dummy_str));
+        write(kill_pipe_fds.write_fd(), dummy_str, sizeof(char));
     }
 };
 

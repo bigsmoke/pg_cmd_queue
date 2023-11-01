@@ -28,12 +28,12 @@
 template <typename T>
 class CmdQueueRunner
 {
+    bool _running = false;
     bool _keep_running = true;
     CmdQueue _cmd_queue;
     std::string _conn_str;
     Logger *logger = Logger::getInstance();
     bool _is_prepared = false;
-    int _received_signal = 0;
 
     void _setup_session(std::shared_ptr<PG::conn> &conn)
     {
@@ -132,6 +132,8 @@ class CmdQueueRunner
 
     void _run()
     {
+        _running = true;
+
         Logger::cmd_queue = std::make_shared<CmdQueue>(_cmd_queue); // FIXME: This makes a copy
 
         std::shared_ptr<PG::conn> conn = nullptr;
@@ -205,9 +207,13 @@ class CmdQueueRunner
 
                     T queue_cmd(select_result, 0, selected_field_numbers);
 
+                    queue_cmd.meta.stamp_start_time();
+
                     // Delegate the execution of the command to the specific `(Nix|Sql|Http)QueueCommand`.
                     // `conn` is passed to `run_cmd()` solely because `SqlQueueCommand` needs the connection.
                     queue_cmd.run_cmd(conn, _cmd_queue.queue_cmd_timeout_sec);
+
+                    queue_cmd.meta.stamp_end_time();
 
                     std::shared_ptr<PG::result> update_result = PQ::execParams(
                         conn,
@@ -317,11 +323,11 @@ class CmdQueueRunner
                         }
                     }
 
-                    if (reselect_next_when <= std::chrono::steady_clock::now())
-                        break; // Time to go back to (re)select loop
-
                     std::chrono::milliseconds reselect_wait_time_left = std::chrono::duration_cast<
                         std::chrono::milliseconds>(reselect_next_when - std::chrono::steady_clock::now());
+
+                    if (reselect_wait_time_left.count() < 0)
+                        reselect_wait_time_left = std::chrono::milliseconds::zero();
 
                     int fd_count = poll(poll_fds, 2, reselect_wait_time_left.count());
                     if (fd_count < 0)
@@ -329,6 +335,7 @@ class CmdQueueRunner
                         if (errno == EINTR)
                             continue; // We will see if `_keep_running` turned `false`.
                         logger->log(LOG_ERROR, "poll() failed: %s", strerror(errno));
+                        _running = false;
                         return; // Leave this runner thread.
                     }
                     if (fd_count == 0)
@@ -346,24 +353,39 @@ class CmdQueueRunner
                         // in the next iteration of this loop.
                     }
 
-                    if (poll_fds[1].revents != 0) // poll_fd[1].fd = kill_pipe_fds.read_fd()
+                    if (poll_fds[1].revents != 0)  // poll_fd[1].fd = kill_pipe_fds.read_fd()
                     {
+                        int sig_num = -1;
+                        int sig_num_bytes_total = 0;
+                        int sig_num_bytes_read = 0;
+                        while ((sig_num_bytes_read = read(kill_pipe_fds.read_fd(),
+                                                          &sig_num + sig_num_bytes_total * sizeof(char),
+                                                          sizeof(int))) > 0)
+                        {
+                            sig_num_bytes_total += sig_num_bytes_read;
+                        }
+                        if (sig_num_bytes_read < 0 and sig_num_bytes_total < (int)sizeof(int))
+                        {
+                            if (errno == EINTR) continue;  // Another signal might have come in
+                            if (errno == EAGAIN) continue;  // Maybe we have to wait for the rest of the `write()`?
+                            logger->log(LOG_ERROR,
+                                        "Unexpected error while reading from kill pipe FD: %s",
+                                        strerror(errno));
+                            _running = false;
+                            return;
+                        }
                         logger->log(LOG_DEBUG1,
                                     "Exiting `poll()` loop after receiving `kill(%i)` signal via pipe.",
-                                    _received_signal);
-                        assert(not _keep_running); // Should have already been set.
-                        // Before we lay ourselves down, let's read the available bytes.
-                        const int buf_size = 4;
-                        char buf[buf_size];
-                        while (read(kill_pipe_fds.read_fd(), &buf, buf_size) > 0)
-                        {
-                        }
+                                    sig_num);
+                        _keep_running = false;
                     }
-                } // PQnotify() & poll() loop
+                }  // PQnotify() & poll() loop
 
-            } // (re)select loop
-        }     // (re)connect loop
+            }  // (re)select loop
+        }  // (re)connect loop
         logger->log(LOG_DEBUG5, "Exited outer/(re)connect loop");
+
+        _running = false;
     }
 
 public:
@@ -388,25 +410,35 @@ public:
 
     ~CmdQueueRunner() = default;
 
+    bool running() const
+    {
+        return _running;
+    }
+
     bool is_prepared() const
     {
         return _is_prepared;
     }
 
-    void stop_running(int sig_num = 0)
+    void kill(int sig_num = 0)
     {
-        _received_signal = sig_num;
+        if (not _running) return;
 
-        logger->log(LOG_INFO,
-                    "Requesting `%s` runner (thread) to shut down gently.",
-                    _cmd_queue.queue_cmd_class_qualified.c_str());
+        if (sig_num > 0)
+            logger->log(LOG_DEBUG5,
+                        "Simulating `kill(%i)` signal to runner `%s` thread",
+                        sig_num,
+                        _cmd_queue.queue_cmd_class_qualified.c_str());
 
-        // Mark that this runner (its thread) has to stop running.
-        this->_keep_running = false;
-
-        // Write dummy data to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
-        const char dummy_str[] = "_";
-        write(kill_pipe_fds.write_fd(), dummy_str, sizeof(char));
+        // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
+        // We stupidly write the binary representation of the `int`, knowing that the endianness at the other
+        // end of the pipe is the same, since we're the same program (though not the same thread).
+        if ((write(kill_pipe_fds.write_fd(), (char *)&sig_num, sizeof(int))) < 0)
+        {
+            logger->log(LOG_ERROR,
+                        "Error while trying to pass signal from main thread to event loop in runner thread: %s",
+                        strerror(errno));
+        }
     }
 };
 

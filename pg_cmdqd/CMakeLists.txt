@@ -22,6 +22,7 @@ add_executable(pg_cmdqd
     queuecmdmetadata.h queuecmdmetadata.cpp
     nixqueuecmd.h nixqueuecmd.cpp
     sqlqueuecmd.h sqlqueuecmd.cpp
+    sigstate.h sigstate.cpp
     pg_cmd_queue_daemon.cpp
 )
 

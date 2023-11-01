@@ -19,6 +19,7 @@ class CmdQueueRunnerManager
     std::shared_ptr<PG::conn> _conn;
     bool _keep_running = true;
     sigset_t _sigset_masked_in_runner_threads;
+    PipeFds _kill_pipe_fds;
 
 public:
     bool emit_sigusr1_when_ready = false;
@@ -34,11 +35,11 @@ public:
     void refresh_queue_list();  // TODO: Check if changed queues are adequately restarted
     void listen_for_queue_list_changes();
     void add_runner(const CmdQueue &cmd_queue);
-    void stop_runner(const std::string &queue_cmd_class);
+    void stop_runner(const std::string &queue_cmd_class, const int simulate_signal);
+    void stop_all_runners();
     void join_all_threads();
     std::vector<std::string> queue_cmd_classes();
-    void stop_running();
-    void receive_signal(int sig);
+    void receive_signal(const int sig_num);
     void install_signal_handlers();
 };
 

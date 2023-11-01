@@ -149,6 +149,8 @@ int main(int argc, char **argv)
 
     manager.listen_for_queue_list_changes();
 
+    manager.stop_all_runners();
+
     manager.join_all_threads();
 
     return 0;

@@ -144,8 +144,6 @@ SqlQueueCmd::handle_sql_fatality(std::shared_ptr<PG::result> &result)
 
 void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec)
 {
-    meta.stamp_start_time();
-
     // TODO: Check connection viability
 
     PQnoticeReceiver old_receiver = PQsetNoticeReceiver(conn->get(), SqlQueueCmd::receive_notice_c_wrapper, nullptr);
@@ -224,6 +222,4 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
     }
 
     PQsetNoticeReceiver(conn->get(), old_receiver, nullptr);
-
-    meta.stamp_end_time();
 }

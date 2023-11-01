@@ -4,12 +4,14 @@
 #include <unistd.h>
 
 #include "pq-raii/libpq-raii.hpp"
+#include "sigstate.h"
 
 CmdQueueRunnerManager::CmdQueueRunnerManager(
         const std::string &conn_str,
         const bool emit_sigusr1_when_ready,
         const std::vector<std::string> &explicit_queue_cmd_classes)
     : _conn_str(conn_str),
+      _kill_pipe_fds(O_NONBLOCK),
       emit_sigusr1_when_ready(emit_sigusr1_when_ready),
       explicit_queue_cmd_classes(explicit_queue_cmd_classes)
 {
@@ -66,7 +68,12 @@ void CmdQueueRunnerManager::refresh_queue_list()
 
     for (const std::string &old_cmd_class : _old_queue_cmd_classes)
         if (_new_queue_cmd_classes.count(old_cmd_class) == 0)
-            this->stop_runner(old_cmd_class);
+        {
+            logger->log(LOG_DEBUG5,
+                        "Asking runner `%s` thread for disappeared `cmd_queue` to stop.",
+                        old_cmd_class.c_str());
+            this->stop_runner(old_cmd_class, SIGTERM);
+        }
     _old_queue_cmd_classes = _new_queue_cmd_classes;
 }
 
@@ -88,7 +95,8 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
     }
 
     struct pollfd fds[] = {
-        { PQ::socket(_conn), POLLIN | POLLPRI, 0 }
+        { PQ::socket(_conn), POLLIN | POLLPRI, 0 },
+        { _kill_pipe_fds.read_fd(), POLLIN | POLLPRI, 0 },
     };
 
     if (fds[0].fd < 0)
@@ -99,7 +107,7 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
 
     while (_keep_running)
     {
-        int fd_count = poll(fds, 1, -1);
+        int fd_count = poll(fds, 2, -1);
         if (fd_count < 0)
         {
             if (errno == EINTR) continue;
@@ -107,21 +115,34 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
             return;
         }
 
-        PQ::consumeInput(_conn);
-        while (_keep_running)
+        if (fds[0].revents != 0)
         {
-            std::shared_ptr<PG::notify> notify = PQ::notifies(_conn);
-            if (notify->get() == nullptr)
-                break;
-            logger->log(LOG_INFO, "Received a NOTIFY event on the `%s` channel: %s", notify->relname().c_str(), notify->extra().c_str());
-            std::vector<std::optional<std::string>> payload_fields = PQ::from_text_composite_value((notify->extra()));
-            // TODO: replicate parsing logic from cmdqueuerunner.h
-            if (payload_fields.at(0) == "cmd_queue" and (payload_fields.at(2) == "INSERT" or payload_fields.at(2) == "UPDATE" or payload_fields.at(2) == "DELETE"))
-            {
-                refresh_queue_list();
-            }
-
             PQ::consumeInput(_conn);
+            while (_keep_running)
+            {
+                std::shared_ptr<PG::notify> notify = PQ::notifies(_conn);
+                if (notify->get() == nullptr)
+                    break;
+                logger->log(LOG_INFO, "Received a NOTIFY event on the `%s` channel: %s", notify->relname().c_str(), notify->extra().c_str());
+                std::vector<std::optional<std::string>> payload_fields = PQ::from_text_composite_value((notify->extra()));
+                // TODO: replicate parsing logic from cmdqueuerunner.h
+                if (payload_fields.at(0) == "cmd_queue" and (payload_fields.at(2) == "INSERT" or payload_fields.at(2) == "UPDATE" or payload_fields.at(2) == "DELETE"))
+                {
+                    refresh_queue_list();
+                }
+
+                PQ::consumeInput(_conn);
+            }
+        }
+
+        if (fds[1].revents != 0)
+        {
+            int sig_num = -1;
+            while (read(_kill_pipe_fds.read_fd(), &sig_num, sizeof(int)) > 0) {}
+            logger->log(LOG_DEBUG1,
+                        "Exiting `poll()` loop after receiving `kill(%i)` signal via pipe.",
+                        sig_num);
+            _keep_running = false;
         }
     }
 }
@@ -163,42 +184,54 @@ void CmdQueueRunnerManager::add_runner(const CmdQueue &cmd_queue)
     sigprocmask(SIG_UNBLOCK, &_sigset_masked_in_runner_threads, nullptr);
 }
 
-void CmdQueueRunnerManager::stop_runner(const std::string &queue_cmd_class)
+void CmdQueueRunnerManager::stop_runner(
+        const std::string &queue_cmd_class,
+        const int simulate_signal)
 {
     if (_nix_cmd_queue_runners.count(queue_cmd_class) == 1)
-        _nix_cmd_queue_runners.at(queue_cmd_class).stop_running();
+        _nix_cmd_queue_runners.at(queue_cmd_class).kill(simulate_signal);
     else if (_sql_cmd_queue_runners.count(queue_cmd_class) == 1)
-        _sql_cmd_queue_runners.at(queue_cmd_class).stop_running();
+        _sql_cmd_queue_runners.at(queue_cmd_class).kill(simulate_signal);
     else
         throw std::runtime_error("Could not find runner for queue_cmd_class = '" + queue_cmd_class + "'");
 }
 
+void CmdQueueRunnerManager::stop_all_runners()
+{
+    int sig_num = sig_num_received({SIGQUIT, SIGTERM, SIGINT});
+
+    if (sig_num > 0)
+        logger->log(LOG_INFO, "Passing the `kill(%i)` signal on to all runner threads.", sig_num);
+
+    for (auto &pair: _nix_cmd_queue_runners)
+        pair.second.kill(sig_num);
+    for (auto &pair: _sql_cmd_queue_runners)
+        pair.second.kill(sig_num);
+}
+
 void CmdQueueRunnerManager::join_all_threads()
 {
-    // TODO: Strictly speaking not an iterator, but a pair.
-    for (auto &it : _nix_cmd_queue_runners)
-        if (it.second.thread.joinable())
-            it.second.thread.join();
-    for (auto &it : _sql_cmd_queue_runners)
-        if (it.second.thread.joinable())
-            it.second.thread.join();
+    for (auto &pair : _nix_cmd_queue_runners)
+        if (pair.second.thread.joinable())
+            pair.second.thread.join();
+    for (auto &pair : _sql_cmd_queue_runners)
+        if (pair.second.thread.joinable())
+            pair.second.thread.join();
 }
 
-void CmdQueueRunnerManager::stop_running()
+void CmdQueueRunnerManager::receive_signal(const int sig_num)
 {
-    _keep_running = false;
-}
+    sig_recv[sig_num] = true;
 
-void CmdQueueRunnerManager::receive_signal(int sig)
-{
-    if (sig == SIGTERM || sig == SIGINT)
+    if (sig_num == SIGTERM or sig_num == SIGINT or sig_num == SIGQUIT)
     {
-        logger->log(LOG_INFO, "Received signal %i", sig);
-        _keep_running = false;
-        for (auto &it: _nix_cmd_queue_runners)
-            it.second.stop_running(sig);
-        for (auto &it: _sql_cmd_queue_runners)
-            it.second.stop_running(sig);
+        // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
+        // We stupidly write the binary representation of the `int`, knowing that the endianness at the other
+        // end of the pipe is the same, since we're the same program.
+        if ((write(_kill_pipe_fds.write_fd(), (char *)&sig_num, sizeof(int))) < 0)
+        {
+            // TODO: We're in a signal handler. What can we even do on error?
+        }
     }
 }
 
@@ -220,4 +253,5 @@ void CmdQueueRunnerManager::install_signal_handlers()
     sig_handler.sa_flags = 0;
     sigaction(SIGTERM, &sig_handler, NULL);
     sigaction(SIGINT, &sig_handler, NULL);
+    sigaction(SIGQUIT, &sig_handler, NULL);
 }

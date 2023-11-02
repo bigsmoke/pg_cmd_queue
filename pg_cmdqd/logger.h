@@ -95,6 +95,7 @@ class Logger
 
 public:
     thread_local static std::shared_ptr<CmdQueue> cmd_queue;
+    bool logTimes = true;
 
     static Logger *getInstance();
     void log(LogLevel level, const char *str, va_list args);

@@ -34,6 +34,11 @@ add_executable(nixtestcmd
     nixtestcmd.cpp
 )
 
+add_executable(with_cmdqd
+    pipefds.h pipefds.cpp
+    with_cmdqd.cpp
+)
+
 if (APPLE)
     set(APPLEISH TRUE)
 endif()

@@ -18,12 +18,25 @@ CmdQueueRunnerManager::CmdQueueRunnerManager(
     sigemptyset(&_sigset_masked_in_runner_threads);
     sigaddset(&_sigset_masked_in_runner_threads, SIGTERM);
     sigaddset(&_sigset_masked_in_runner_threads, SIGINT);
+}
 
-    // TODO: Move to main()
-    install_signal_handlers();
+CmdQueueRunnerManager *CmdQueueRunnerManager::make_instance(
+            const std::string &conn_str,
+            const bool emit_sigusr1_when_ready,
+            const std::vector<std::string> &explicit_queue_cmd_classes)
+{
+    _instance = new CmdQueueRunnerManager(conn_str, emit_sigusr1_when_ready, explicit_queue_cmd_classes);
+    return _instance;
+}
 
-    maintain_connection(conn_str, _conn);
-    refresh_queue_list();
+CmdQueueRunnerManager *CmdQueueRunnerManager::get_instance()
+{
+    return CmdQueueRunnerManager::_instance;
+}
+
+void CmdQueueRunnerManager::maintain_connection()
+{
+    ::maintain_connection(_conn_str, _conn);
 }
 
 bool CmdQueueRunnerManager::queue_has_runner_already(const CmdQueue &cmd_queue)
@@ -203,7 +216,7 @@ void CmdQueueRunnerManager::stop_all_runners()
     int sig_num = sig_num_received({SIGQUIT, SIGTERM, SIGINT});
 
     if (sig_num > 0)
-        logger->log(LOG_INFO, "Passing the `kill(%i)` signal on to all runner threads.", sig_num);
+        logger->log(LOG_INFO, "Passing the `kill(%i)` signal on to all remaining runner threads.", sig_num);
 
     for (auto &pair: _nix_cmd_queue_runners)
         pair.second.kill(sig_num);
@@ -230,28 +243,33 @@ void CmdQueueRunnerManager::receive_signal(const int sig_num)
         // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
         // We stupidly write the binary representation of the `int`, knowing that the endianness at the other
         // end of the pipe is the same, since we're the same program.
-        if ((write(_kill_pipe_fds.write_fd(), &sig_num, sizeof(int))) < 0)
+        size_t kill_pipe_bytes_written = 0;
+        size_t kill_pipe_bytes_to_write = sizeof(int);
+        size_t kill_pipe_ptr_offset = 0;
+        while ((kill_pipe_bytes_written = write(_kill_pipe_fds.write_fd(),
+                                                &sig_num + kill_pipe_ptr_offset,
+                                                kill_pipe_bytes_to_write)
+               ) > 0
+               or (kill_pipe_bytes_written < 0 and errno == SIGINT))
         {
-            // TODO: We're in a signal handler. What can we even do on error?
+            kill_pipe_bytes_to_write -= kill_pipe_bytes_written;
+            kill_pipe_ptr_offset += kill_pipe_bytes_written;
         }
     }
 }
 
-std::function<void(int)> cpp_signal_handler;
-
-void c_signal_handler(int sig)
+void signal_handler(const int sig_num)
 {
-    cpp_signal_handler(sig);
+    CmdQueueRunnerManager *manager = CmdQueueRunnerManager::get_instance();
+    if (!manager) return;
+
+    manager->receive_signal(sig_num);
 }
 
 void CmdQueueRunnerManager::install_signal_handlers()
 {
-    // TODO: Make this ugliness unnecessary by turning ...Manager into a singleton.
-    cpp_signal_handler = std::bind(&CmdQueueRunnerManager::receive_signal,
-                                   this,
-                                   std::placeholders::_1);
     struct sigaction sig_handler;
-    sig_handler.sa_handler = c_signal_handler;
+    sig_handler.sa_handler = signal_handler;
     sigemptyset(&sig_handler.sa_mask);
     sig_handler.sa_flags = 0;
     sigaction(SIGTERM, &sig_handler, nullptr);

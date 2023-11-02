@@ -3,12 +3,13 @@ EXTENSION = pg_cmd_queue
 PG_CMDQD_DIR_NAME := pg_cmdqd
 PG_CMDQD_DIR_PATH := $(CURDIR)/$(PG_CMDQD_DIR_NAME)
 PG_CMDQD_BUILD_TYPE ?= Release
+PG_CMDQD_REGRESS_LAUNCHER := $(PG_CMDQD_DIR_NAME)/Debug/with_cmdqd
 PG_CMDQD_DEBUG_TARGET := $(PG_CMDQD_DIR_NAME)/Debug/pg_cmdqd
 PG_CMDQD_RELEASE_TARGET := $(PG_CMDQD_DIR_NAME)/Release/pg_cmdqd
 PG_CMDQD_DEFAULT_TARGET := $(PG_CMDQD_DIR_NAME)/$(PG_CMDQD_BUILD_TYPE)/pg_cmdqd
 PG_CMDQD_TARGETS := $(if $(or $(filter Debug,$(PG_CMDQD_BUILD_TYPE)),$\
                               $(filter installcheck,$(MAKECMDGOALS))),$\
-                          $(PG_CMDQD_DEBUG_TARGET))
+                          $(PG_CMDQD_DEBUG_TARGET) $(PG_CMDQD_REGRESS_LAUNCHER))
 PG_CMDQD_TARGETS += $(if $(filter Release,$(PG_CMDQD_BUILD_TYPE)),$\
                           $(PG_CMDQD_RELEASE_TARGET))
 
@@ -20,7 +21,7 @@ REGRESS = test_extension_update_paths
 
 # We kinda need to use a temp. instance; or at least, we don't want `psql` to try to drop and recreate
 # the database after with already launched `pg_cmdqd`.
-REGRESS_OPTS += --launcher=$(CURDIR)/bin/with_cmdqd.sh --temp-instance=$(CURDIR)/temp-instance
+REGRESS_OPTS += --launcher=$(PG_CMDQD_REGRESS_LAUNCHER) --temp-instance=$(CURDIR)/temp-instance
 
 # `pg_cmd_queue_daemon` is not a script, but when we call it a `PROGRAM_built`, PGXS wants to play with its
 # object files—a task which we want to leave up to the CMake (wrapped by a GNU Makefile) in the daemon's

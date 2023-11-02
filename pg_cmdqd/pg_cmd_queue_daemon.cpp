@@ -39,6 +39,7 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << std::endl
         << "Options:" << std::endl
         << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
+        << "    \x1b[1m--log-times\x1b[22m | \x1b[1m--no-log-times\x1b[22m" << std::endl
         << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated." << std::endl
         << "    \x1b[1m--emit-sigusr1-when-ready\x1b[22m" << std::endl
         << std::endl;
@@ -92,6 +93,15 @@ int main(int argc, char **argv)
                 throw CmdLineParseError(std::string("Unrecognized log level: ") + log_level_from_env);
             logger->setLogLevel(StringToLogLevel.at(log_level_from_env));
         }
+
+        const char *log_times = std::getenv("PG_CMDQD_LOG_TIMES");
+        const std::string log_times_from_env(log_times ? log_times : "");
+
+        if (log_times_from_env == "true" or log_times_from_env == "TRUE"
+            or log_times_from_env == "yes" or log_times_from_env == "YES")
+        {
+            logger->logTimes = true;
+        }
     }
     catch (const CmdEnvParseError &err)
     {
@@ -127,6 +137,14 @@ int main(int argc, char **argv)
             {
                 emit_sigusr1_when_ready = true;
             }
+            else if (std::string(argv[i]) == "--log-times")
+            {
+                logger->logTimes = true;
+            }
+            else if (std::string(argv[i]) == "--no-log-times")
+            {
+                logger->logTimes = false;
+            }
             else if (i == argc - 1)
             {
                 // Assume that the last argument is the connection string.
@@ -145,13 +163,20 @@ int main(int argc, char **argv)
 
     setenv("PGAPPNAME", basename(argv[0]), 1);
 
-    CmdQueueRunnerManager manager(conn_str, emit_sigusr1_when_ready, explicit_queue_cmd_classes);
+    CmdQueueRunnerManager *manager = CmdQueueRunnerManager::make_instance(
+            conn_str, emit_sigusr1_when_ready, explicit_queue_cmd_classes);
 
-    manager.listen_for_queue_list_changes();
+    manager->install_signal_handlers();
 
-    manager.stop_all_runners();
+    manager->maintain_connection();
 
-    manager.join_all_threads();
+    manager->refresh_queue_list();
+
+    manager->listen_for_queue_list_changes();
+
+    manager->stop_all_runners();
+
+    manager->join_all_threads();
 
     return 0;
 }

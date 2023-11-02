@@ -225,9 +225,9 @@ void Logger::log(LogLevel level, const char *str, va_list valist)
 
     std::string str_(str);
     if (cmd_queue != nullptr) oss << "\x1b" << cmd_queue->ansi_fg;
-    oss << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] [";
-    if (cmd_queue != nullptr) oss << cmd_queue->queue_cmd_relname << "] [";
-    oss << getLogLevelString(level) << "] " << str_;
+    if (logTimes) oss << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] ";
+    if (cmd_queue != nullptr) oss << "[" << cmd_queue->queue_cmd_relname << "] ";
+    oss << "[" << getLogLevelString(level) << "] " << str_;
     if (cmd_queue != nullptr) oss << "\x1b[0m";
     oss.flush();
     const std::string s = oss.str();

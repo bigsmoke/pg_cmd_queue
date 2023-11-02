@@ -19,6 +19,7 @@ CmdQueueRunnerManager::CmdQueueRunnerManager(
     sigaddset(&_sigset_masked_in_runner_threads, SIGTERM);
     sigaddset(&_sigset_masked_in_runner_threads, SIGINT);
 
+    // TODO: Move to main()
     install_signal_handlers();
 
     maintain_connection(conn_str, _conn);
@@ -138,6 +139,7 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
         if (fds[1].revents != 0)
         {
             int sig_num = -1;
+            // TODO: Replicate logic from CmdQueueRunner._run()
             while (read(_kill_pipe_fds.read_fd(), &sig_num, sizeof(int)) > 0) {}
             logger->log(LOG_DEBUG1,
                         "Exiting `poll()` loop after receiving `kill(%i)` signal via pipe.",
@@ -228,7 +230,7 @@ void CmdQueueRunnerManager::receive_signal(const int sig_num)
         // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
         // We stupidly write the binary representation of the `int`, knowing that the endianness at the other
         // end of the pipe is the same, since we're the same program.
-        if ((write(_kill_pipe_fds.write_fd(), (char *)&sig_num, sizeof(int))) < 0)
+        if ((write(_kill_pipe_fds.write_fd(), &sig_num, sizeof(int))) < 0)
         {
             // TODO: We're in a signal handler. What can we even do on error?
         }
@@ -244,6 +246,7 @@ void c_signal_handler(int sig)
 
 void CmdQueueRunnerManager::install_signal_handlers()
 {
+    // TODO: Make this ugliness unnecessary by turning ...Manager into a singleton.
     cpp_signal_handler = std::bind(&CmdQueueRunnerManager::receive_signal,
                                    this,
                                    std::placeholders::_1);
@@ -251,7 +254,7 @@ void CmdQueueRunnerManager::install_signal_handlers()
     sig_handler.sa_handler = c_signal_handler;
     sigemptyset(&sig_handler.sa_mask);
     sig_handler.sa_flags = 0;
-    sigaction(SIGTERM, &sig_handler, NULL);
-    sigaction(SIGINT, &sig_handler, NULL);
-    sigaction(SIGQUIT, &sig_handler, NULL);
+    sigaction(SIGTERM, &sig_handler, nullptr);
+    sigaction(SIGINT, &sig_handler, nullptr);
+    sigaction(SIGQUIT, &sig_handler, nullptr);
 }

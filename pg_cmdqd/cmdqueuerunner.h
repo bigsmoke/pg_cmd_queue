@@ -433,7 +433,7 @@ public:
         // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
         // We stupidly write the binary representation of the `int`, knowing that the endianness at the other
         // end of the pipe is the same, since we're the same program (though not the same thread).
-        if ((write(kill_pipe_fds.write_fd(), (char *)&sig_num, sizeof(int))) < 0)
+        if ((write(kill_pipe_fds.write_fd(), &sig_num, sizeof(int))) < 0)
         {
             logger->log(LOG_ERROR,
                         "Error while trying to pass signal from main thread to event loop in runner thread: %s",

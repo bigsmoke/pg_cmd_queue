@@ -13,9 +13,9 @@ PipeFds::PipeFds(int pipe2_flags)
         throw std::runtime_error(strerror(errno));
 
     if (pipe2_flags != 0) {
-        if ((fcntl(this->fds[0], F_SETFL, fcntl(this->fds[0], F_GETFL) | O_NONBLOCK)) < 0)
+        if ((fcntl(this->fds[0], F_SETFL, fcntl(this->fds[0], F_GETFL) | pipe2_flags)) < 0)
             throw std::runtime_error(strerror(errno));
-        if ((fcntl(this->fds[1], F_SETFL, fcntl(this->fds[1], F_GETFL) | O_NONBLOCK)) < 0)
+        if ((fcntl(this->fds[1], F_SETFL, fcntl(this->fds[1], F_GETFL) | pipe2_flags)) < 0)
             throw std::runtime_error(strerror(errno));
     }
 }

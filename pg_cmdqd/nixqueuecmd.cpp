@@ -414,43 +414,32 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
             if (fds[1].revents & POLLIN)
             {
                 logger->log(LOG_DEBUG5, "cmd STDOUT ready for read()");
-                bool read_from_stdout_erred = false;
                 ssize_t stdout_bytes_read = 0;
-                while ((stdout_bytes_read = read(stdout_fds.read_fd(), stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) != 0)
+                while ((stdout_bytes_read = read(stdout_fds.read_fd(), stdout_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
                 {
-                    if (stdout_bytes_read < 0)
-                    {
-                        if (errno == EINTR) continue;
-                        if (errno == EWOULDBLOCK || errno == EAGAIN) break;
-                        this->cmd_stderr = formatString("Error during read() from cmd STDOUT: %s", strerror(errno));
-                        this->cmd_term_sig = SIGABRT;
-                        read_from_stdout_erred = true;
-                        break;
-                    }
-                    logger->log(LOG_DEBUG5, "Read %i bytes from cmd STDOUT: %s", stdout_bytes_read, stdout_buf);
                     this->cmd_stdout += std::string(stdout_buf, stdout_bytes_read);
                 }
-                if (read_from_stdout_erred) break;
+                if (stdout_bytes_read < 0 and errno != EAGAIN)
+                {
+                    this->cmd_stderr = formatString("Error during read() from cmd STDOUT: %s", strerror(errno));
+                    this->cmd_term_sig = SIGABRT;
+                    break;
+                }
             }
             if (fds[2].revents & POLLIN)
             {
                 logger->log(LOG_DEBUG5, "cmd STDERR ready for read()");
-                bool read_from_stderr_erred = false;
                 ssize_t stderr_bytes_read = 0;
-                while ((stderr_bytes_read = read(stderr_fds.read_fd(), stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) != 0)
+                while ((stderr_bytes_read = read(stderr_fds.read_fd(), stderr_buf, CMDQD_PIPE_BUFFER_SIZE)) > 0)
                 {
-                    if (stderr_bytes_read < 0)
-                    {
-                        if (errno == EINTR) continue;
-                        if (errno == EWOULDBLOCK || errno == EAGAIN) break;
-                        this->cmd_stderr = formatString("Error during read() from cmd STDERR: %s", strerror(errno));
-                        this->cmd_term_sig = SIGABRT;
-                        read_from_stderr_erred = true;
-                        break;
-                    }
                     this->cmd_stderr += std::string(stderr_buf, stderr_bytes_read);
                 }
-                if (read_from_stderr_erred) break;
+                if (stderr_bytes_read < 0 and errno != EAGAIN)
+                {
+                    this->cmd_stderr = formatString("Error during read() from cmd STDERR: %s", strerror(errno));
+                    this->cmd_term_sig = SIGABRT;
+                    break;
+                }
             }
 
             if (fds[0].revents & (POLLERR | POLLHUP))

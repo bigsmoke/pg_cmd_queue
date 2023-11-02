@@ -1026,6 +1026,42 @@ create table http_queue_cmd_template (
 
 --------------------------------------------------------------------------------------------------------------
 
+/*
+create procedure cmd_queue_session_start(cmd_queue)
+    set search_path from current
+    language plpgsql
+    as $$
+begin
+    if ($1).queue_runner_role is not null then
+        execute format('SET SESSION ROLE %I', ($1).queue_runner_role);
+    end if;
+
+    create temporary table update_erred_cmd (like queue_cmd_template including all);
+end;
+$$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create function nix_queue_cmd_select(cmd_queue$ cmd_queue, reselect_round$ int)
+    returns nix_queue_cmd_template
+    volatile
+begin atomic
+    select
+end;
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure nix_queue_cmd_update(nix_queue_cmd_template)
+    set search_path from current
+    language plpgsql
+    as $$
+begin
+end;
+$$;
+*/
+
+--------------------------------------------------------------------------------------------------------------
+
 create procedure test__pg_cmd_queue()
     set search_path from current
     set plpgsql.check_asserts to true

@@ -123,6 +123,8 @@ void Logger::queueReOpen()
 
 void Logger::reOpen()
 {
+    reload = false;
+
     if (file)
     {
         fclose(file);

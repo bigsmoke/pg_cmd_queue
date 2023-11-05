@@ -114,13 +114,14 @@ begin
                 and pg_proc.prokind in ('f', 'p')
             loop
                 raise notice '%', _test_proc;
-                -- TODO: Make this dynamic again, but probably via a build step, because `EXECUTE`
-                --       doesn't let through transaction control commands
-                --execute _test_proc;
-                call cmdq.test_integration__pg_cmdqd('setup');
-                call cmdq.test_integration__pg_cmdqd('test');
-                call cmdq.test_integration__pg_cmdqd('teardown');
+                execute _test_proc;
             end loop;
+
+            -- TODO: Make this dynamictoo, but probably via a build step, because `EXECUTE`
+            --       doesn't let through transaction control commands
+            call cmdq.test_integration__pg_cmdqd('setup');
+            call cmdq.test_integration__pg_cmdqd('test');
+            call cmdq.test_integration__pg_cmdqd('teardown');
 
             raise notice '%', _drop_extension;
             execute _drop_extension;

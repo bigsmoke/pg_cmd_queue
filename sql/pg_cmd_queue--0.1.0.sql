@@ -400,6 +400,150 @@ select pg_catalog.pg_extension_config_dump('cmd_queue', 'WHERE pg_extension_name
 
 --------------------------------------------------------------------------------------------------------------
 
+create function cmd_queue__create_queue_signature_downcast()
+    returns trigger
+    set search_path from current
+    language plpgsql
+    as $$
+declare
+    _extension_context_detection_object name;
+    _extension_context name;
+begin
+    assert tg_when = 'AFTER';
+    assert tg_op in ('INSERT', 'UPDATE', 'DELETE');
+    assert tg_level = 'ROW';
+    assert tg_table_schema = 'cmdq';
+    assert tg_table_name = 'cmd_queue';
+
+    -- The extension context may be:
+    --    a) outside of a `CREATE EXTENSION` / `ALTER EXTENSION` context (`_extension_context IS NULL`);
+    --    b) inside the `CREATE EXTENSION` / `ALTER EXTENSION` context of the extension owning the config
+    --       table to which this trigger is attached; or
+    --    c) inside the `CREATE EXTENSION` / `ALTER EXTENSION` context of extension that changes settings in
+    --       another extension's configuration table.
+    _extension_context_detection_object := format(
+        'extension_context_detector_%s'
+        ,floor(pg_catalog.random() * 1000)
+    );
+    execute format('CREATE TEMPORARY TABLE %I (col int) ON COMMIT DROP', _extension_context_detection_object);
+    select
+        pg_extension.extname
+    into
+        _extension_context
+    from
+        pg_catalog.pg_depend
+    inner join
+        pg_catalog.pg_extension
+        on pg_extension.oid = pg_depend.refobjid
+    where
+        pg_depend.classid = 'pg_catalog.pg_class'::regclass
+        and pg_depend.objid = _extension_context_detection_object::regclass
+        and pg_depend.refclassid = 'pg_catalog.pg_extension'::regclass
+    ;
+    execute format('DROP TABLE %I', _extension_context_detection_object);
+
+    if tg_op = 'DELETE' then
+        execute format(
+            'DROP CAST (%2$s AS %1$s)'
+            ,OLD.queue_signature_class::text
+            ,OLD.queue_cmd_class::text
+        );
+        execute format(
+            'DROP FUNCTION %1$s(%2$s)'
+            ,OLD.queue_signature_class::text
+            ,OLD.queue_cmd_class::text
+        );
+    end if;
+
+    if tg_op in ('INSERT', 'UPDATE') then
+        if  tg_op = 'UPDATE'
+            and OLD.pg_extension_name is not null
+            and _extension_context is distinct from OLD.pg_extension_name
+        then
+            execute format(
+                'ALTER EXTENSION %3$I DROP FUNCTION %1$s(%2$s)'
+                ,NEW.queue_signature_class::text
+                ,NEW.queue_cmd_class::text
+                ,NEW.pg_extension_name
+            );
+            if _extension_context is not null then
+                execute format(
+                    'ALTER EXTENSION %3$I ADD FUNCTION %1$s(%2$s)'
+                    ,NEW.queue_signature_class::text
+                    ,NEW.queue_cmd_class::text
+                    ,_extension_context
+                );
+            end if;
+        end if;
+
+        execute format(
+            'CREATE OR REPLACE FUNCTION %1$s(%2$s)'
+            ' RETURNS %1$s'
+            ' SET search_path FROM CURRENT'
+            ' IMMUTABLE LEAKPROOF PARALLEL SAFE LANGUAGE SQL'
+            ' AS $sql$SELECT null::%1$s #= hstore($1);$sql$'
+            ,NEW.queue_signature_class::text
+            ,NEW.queue_cmd_class::text
+        );
+
+        if _extension_context is not null and _extension_context is distinct from NEW.pg_extension_name then
+            execute format(
+                'ALTER EXTENSION %3$I DROP FUNCTION %1$s(%2$s)'
+                ,NEW.queue_signature_class::text
+                ,NEW.queue_cmd_class::text
+                ,_extension_context
+            );
+        end if;
+        if  NEW.pg_extension_name is not null
+            and NEW.pg_extension_name is distinct from _extension_context
+        then
+            execute format(
+                'ALTER EXTENSION %3$I ADD FUNCTION %1$s(%2$s)'
+                ,NEW.queue_signature_class::text
+                ,NEW.queue_cmd_class::text
+                ,NEW.pg_extension_name
+            );
+        end if;
+    end if;
+
+    if tg_op = 'INSERT' then
+        execute format(
+            'CREATE CAST (%2$s AS %1$s) WITH FUNCTION %1$s(%2$s) AS IMPLICIT'
+            ,NEW.queue_signature_class::text
+            ,NEW.queue_cmd_class::text
+        );
+        if _extension_context is not null and _extension_context is distinct from NEW.pg_extension_name then
+            execute format(
+                'ALTER EXTENSION %3$I DROP CAST (%2$s AS %1$s)'
+                ,NEW.queue_signature_class::text
+                ,NEW.queue_cmd_class::text
+                ,_extension_context
+            );
+        end if;
+        if  NEW.pg_extension_name is not null
+            and NEW.pg_extension_name is distinct from _extension_context
+        then
+            execute format(
+                'ALTER EXTENSION %3$I ADD CAST (%2$s AS %1$s)'
+                ,NEW.queue_signature_class::text
+                ,NEW.queue_cmd_class::text
+                ,NEW.pg_extension_name
+            );
+        end if;
+    end if;
+
+    return null;
+end;
+$$;
+
+create trigger create_queue_signature_downcast
+    after insert or update or delete
+    on cmd_queue
+    for each row
+    execute function cmd_queue__create_queue_signature_downcast();
+
+--------------------------------------------------------------------------------------------------------------
+
 create function cmd_queue__queue_signature_constraint()
     returns trigger
     set search_path from current
@@ -915,7 +1059,7 @@ create trigger no_insert
 
 --------------------------------------------------------------------------------------------------------------
 
-create function nix_queue_cmd(anynonarray)
+create function nix_queue_cmd_template(record)
     returns nix_queue_cmd_template
     immutable
     leakproof
@@ -925,6 +1069,107 @@ create function nix_queue_cmd(anynonarray)
     as $$
 begin
     return null::nix_queue_cmd_template #= hstore($1);
+end;
+$$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create function nix_queue_cmd_line(nix_queue_cmd_template)
+    returns text
+    immutable
+    leakproof
+    parallel safe
+    set search_path from current
+    language plpgsql
+    as $$
+begin
+    return (
+        coalesce(
+            'echo ' || translate(encode(($1).cmd_stdin, 'base64'), E'\n', '') || ' | base64 -d | '
+            ,''
+        )
+        || coalesce(
+            (
+                select
+                    string_agg(
+                        var_name || '=' || case
+                            when var_value ~ E'["$ \n\t`]' then
+                                '''' || replace(var_value, '''', '\''') || ''''
+                            else
+                                var_value
+                        end
+                        ,' '
+                    )
+                from
+                   each(($1).cmd_env) as env_var(var_name, var_value)
+            ) || ' '
+            ,''
+        )
+        || (
+            select
+                string_agg(
+                    case
+                        when arg ~ E'["$ \n\t`]' then
+                            '''' || replace(arg, '''', '\''') || ''''
+                        else
+                            arg
+                    end
+                    ,' '
+                )
+            from
+                unnest(($1).cmd_argv) as arg
+        )
+    );
+end;
+$$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure test__nix_queue_cmd_line()
+    set search_path from current
+    set plpgsql.check_asserts to true
+    language plpgsql
+    as $$
+declare
+    _cmd record;
+begin
+    create temporary table tst_nix_cmd (
+        like nix_queue_cmd_template including all
+        ,cmd_line_expected text
+            not null
+    ) on commit drop;
+    alter table tst_nix_cmd
+        alter column queue_cmd_class
+            set default to_regclass('tst_nix_cmd')
+        ,alter column cmd_id
+            drop not null;
+    insert into cmd_queue
+        (queue_cmd_class, queue_signature_class)
+    values
+        ('tst_nix_cmd', 'nix_queue_cmd_template')
+    ;
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted text''']
+            ,'VAR1=>"value 1", VAR_TWO=>val2'::hstore
+            ,E'Multiline\ntext\n'
+            ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with \'single-quoted text\''$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
 end;
 $$;
 
@@ -1835,8 +2080,8 @@ $out$, 'UTF8')
 
             commit and chain;  -- Because otherwise, our changes will be invisible to the daemon.
 
-            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd(_expect_1));
-            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd(_expect_2));
+            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd_template(_expect_1));
+            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd_template(_expect_2));
 
             delete from
                 cmdq.tst_nix_cmd__expect
@@ -1857,7 +2102,7 @@ $out$, 'UTF8')
 
             -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which commands are
             -- moved to by the `UPDATE` triggers _on_ the actual command queue table.
-            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd(_expect));
+            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd_template(_expect));
         end loop single_cmd;
 
     elsif test_stage$ = 'teardown' then
@@ -1945,7 +2190,7 @@ begin
             perform set_config('statement_timeout', _cmd_timeout_ms::text, true);
             raise debug using
                 message = format('Executing %s', _cmd_queue.queue_cmd_class)
-                ,detail = jsonb_pretty(to_jsonb(_sql_queue_cmd)):
+                ,detail = jsonb_pretty(to_jsonb(_sql_queue_cmd));
             _cmd_sql_result_rows := null::jsonb;
             for _cmd_sql_result_row in execute _sql_queue_cmd.cmd_sql loop
                 _cmd_sql_result_rows := coalesce(

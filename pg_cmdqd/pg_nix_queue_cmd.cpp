@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <signal.h>
+#include <unistd.h>
 
 #include "nixqueuecmd.h"
 
@@ -101,7 +102,9 @@ int main(const int argc, const char *argv[])
         exit(222);
     }
 
-    std::string cmd_stdin((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
+    std::string cmd_stdin = "";
+    if (not isatty(STDIN_FILENO))
+        cmd_stdin = std::string((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
 
     NixQueueCmd nix_queue_cmd(queue_cmd_class, cmd_id, cmd_subid, cmd_argv, {}, cmd_stdin);
 

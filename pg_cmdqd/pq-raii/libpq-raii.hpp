@@ -590,7 +590,11 @@ namespace PQ
                     const std::string &from)
     {
         size_t to_size;
-        unsigned char *raw_to = PQescapeByteaConn(conn->get(), (const unsigned char *)from.c_str(), (size_t)from.size(), &to_size);
+        unsigned char *raw_to = PQescapeByteaConn(
+                conn->get(),
+                (const unsigned char *)from.c_str(),
+                (size_t)from.size(),
+                &to_size);
         std::string to((const char *)raw_to);
         PQfreemem(raw_to);
         return to;

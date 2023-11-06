@@ -127,7 +127,11 @@ std::vector<std::optional<std::string>> NixQueueCmd::update_params()
     return params;
 }
 
-NixQueueCmd::NixQueueCmd(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &field_numbers) noexcept
+NixQueueCmd::NixQueueCmd(
+        std::shared_ptr<PG::result> &result,
+        int row_number,
+        const std::unordered_map<std::string, int> &field_numbers
+    ) noexcept
     : meta(result, row_number, field_numbers)
 {
     try

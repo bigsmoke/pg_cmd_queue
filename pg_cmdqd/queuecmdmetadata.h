@@ -28,7 +28,11 @@ public:
     double cmd_runtime_end;
 
     QueueCmdMetadata() = delete;
-    QueueCmdMetadata(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    QueueCmdMetadata(
+            std::shared_ptr<PG::result> &result,
+            int row_number,
+            const std::unordered_map<std::string, int> &fieldMapping
+        ) noexcept;
     ~QueueCmdMetadata() = default;
 
     bool is_valid() const;

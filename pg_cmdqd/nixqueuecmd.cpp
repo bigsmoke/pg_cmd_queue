@@ -247,7 +247,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         argv_heads.reserve(this->cmd_argv.size() + 1);
         for (const std::string &s : cmd_argv)
             argv_heads.push_back(const_cast<char*>(s.c_str()));
-        argv_heads[argv_heads.size()-1] = nullptr;
+        argv_heads.push_back(nullptr);
         char **c_argv = argv_heads.data();
         // We don't have to worry about cleaning up c_argv, because execvp() will clear up all that.
 

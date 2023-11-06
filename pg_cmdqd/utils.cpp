@@ -7,11 +7,14 @@
 
 std::string formatString(const std::string str, ...)
 {
-    char buf[512];
-
     va_list valist;
+
     va_start(valist, str);
-    vsnprintf(buf, 512, str.c_str(), valist);
+    int buf_size = vsnprintf(nullptr, 0, str.c_str(), valist) + 1;
+    char buf[buf_size];
+
+    va_start(valist, str);
+    vsnprintf(buf, buf_size, str.c_str(), valist);
     va_end(valist);
 
     size_t len = strlen(buf);

@@ -23,7 +23,6 @@
 #include "utils.h"
 
 // TODO: Use qualified queue names everywhere
-// TODO: Test soft kill and hard kill
 
 template <typename T>
 class CmdQueueRunner

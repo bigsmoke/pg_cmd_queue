@@ -10,7 +10,6 @@ pkg_check_modules(LIBPQ REQUIRED IMPORTED_TARGET libpq)
 add_compile_options(-Wall)
 
 add_executable(pg_cmdqd
-    base64.hpp
     utils.h utils.cpp
     logger.h logger.cpp
     pq-raii/libpq-raii.hpp

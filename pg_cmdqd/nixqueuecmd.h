@@ -21,7 +21,6 @@ class NixQueueCmd
 
     bool _is_valid = false;
 
-    std::string cmd_line() const;
     bool cmd_succeeded() const;
 
 public:
@@ -46,6 +45,8 @@ public:
     static std::string update_stmt(const CmdQueue &cmd_queue);
 
     std::vector<std::optional<std::string>> update_params();
+
+    std::string cmd_line() const;
 
     void run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout);
 };

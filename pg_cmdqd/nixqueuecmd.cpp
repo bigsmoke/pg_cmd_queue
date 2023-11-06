@@ -163,6 +163,21 @@ NixQueueCmd::NixQueueCmd(
     }
 }
 
+NixQueueCmd::NixQueueCmd(
+        const std::string &queue_cmd_class,
+        const std::string &cmd_id,
+        const std::optional<std::string> &cmd_subid,
+        const std::vector<std::string> &cmd_argv,
+        const std::unordered_map<std::string, std::string> &cmd_env,
+        const std::string &cmd_stdin
+    )
+    : meta(queue_cmd_class, cmd_id, cmd_subid),
+      cmd_argv(cmd_argv),
+      cmd_env(cmd_env),
+      cmd_stdin(cmd_stdin)
+{
+}
+
 NixQueueCmd::~NixQueueCmd()
 {
 }

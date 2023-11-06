@@ -35,6 +35,14 @@ public:
     std::string cmd_stderr = "";
 
     NixQueueCmd(std::shared_ptr<PG::result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    NixQueueCmd(
+            const std::string &queue_cmd_class,
+            const std::string &cmd_id,
+            const std::optional<std::string> &cmd_subid,
+            const std::vector<std::string> &cmd_argv,
+            const std::unordered_map<std::string, std::string> &cmd_env,
+            const std::string &cmd_stdin
+        );
     ~NixQueueCmd();
 
     static std::string select_stmt(

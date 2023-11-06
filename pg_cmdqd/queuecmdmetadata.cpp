@@ -30,6 +30,17 @@ QueueCmdMetadata::QueueCmdMetadata(
     }
 }
 
+QueueCmdMetadata::QueueCmdMetadata(
+        const std::string &queue_cmd_class,
+        const std::string &cmd_id,
+        const std::optional<std::string> &cmd_subid
+    )
+    : queue_cmd_class(queue_cmd_class),
+      cmd_id(cmd_id),
+      cmd_subid(cmd_subid)
+{
+}
+
 bool QueueCmdMetadata::is_valid() const
 {
     return _is_valid;

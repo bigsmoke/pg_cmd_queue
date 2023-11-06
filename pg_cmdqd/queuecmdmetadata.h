@@ -33,6 +33,12 @@ public:
             int row_number,
             const std::unordered_map<std::string, int> &fieldMapping
         ) noexcept;
+    QueueCmdMetadata(
+        const std::string &queue_cmd_class,
+        const std::string &cmd_id,
+        const std::optional<std::string> &cmd_subid
+    );
+
     ~QueueCmdMetadata() = default;
 
     bool is_valid() const;

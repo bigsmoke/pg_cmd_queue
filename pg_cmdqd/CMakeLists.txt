@@ -34,6 +34,21 @@ add_executable(nixtestcmd
     nixtestcmd.cpp
 )
 
+add_executable(pg_nix_queue_cmd
+    utils.h utils.cpp
+    logger.h logger.cpp
+    pq-raii/libpq-raii.hpp
+    pipefds.h pipefds.cpp
+    cmdqueue.h cmdqueue.cpp
+    queuecmdmetadata.h queuecmdmetadata.cpp
+    nixqueuecmd.h nixqueuecmd.cpp
+    pg_nix_queue_cmd.cpp
+)
+
+target_include_directories(pg_nix_queue_cmd PUBLIC ${LIBPQ_INCLUDE_DIRS})
+target_link_libraries(pg_nix_queue_cmd pthread ${LIBPQ_LINK_LIBRARIES})
+link_directories(pg_nix_queue_cmd ${LIBPQ_LIBRARY_DIRS})
+
 add_executable(with_cmdqd
     pipefds.h pipefds.cpp
     with_cmdqd.cpp

@@ -1074,7 +1074,7 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create function nix_queue_cmd_line(nix_queue_cmd_template)
+create function nix_queue_cmd_line(nix_queue_cmd_template, bool default false)
     returns text
     immutable
     leakproof
@@ -1117,7 +1117,22 @@ begin
                     ,' '
                 )
             from
-                unnest(($1).cmd_argv) as arg
+                unnest(
+                    case
+                        when $2 then
+                            array[
+                                'pg_nix_queue_cmd'
+                                ,'--output-update'
+                                ,(pg_identify_object('pg_class'::regclass, ($1).queue_cmd_class, 0)).identity
+                                ,($1).cmd_id
+                                ,($1).cmd_subid
+                                ,'--'
+                            ]
+                        else
+                            array[]::text[]
+                    end
+                    || ($1).cmd_argv
+                ) as arg
         )
     );
 end;
@@ -1140,9 +1155,7 @@ begin
     ) on commit drop;
     alter table tst_nix_cmd
         alter column queue_cmd_class
-            set default to_regclass('tst_nix_cmd')
-        ,alter column cmd_id
-            drop not null;
+            set default to_regclass('tst_nix_cmd');
     insert into cmd_queue
         (queue_cmd_class, queue_signature_class)
     values
@@ -1150,9 +1163,10 @@ begin
     ;
 
     with inserted as (
-        insert into tst_nix_cmd (cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
         values (
-            array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted text''']
+            'test1'
+            ,array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted text''']
             ,'VAR1=>"value 1", VAR_TWO=>val2'::hstore
             ,E'Multiline\ntext\n'
             ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with \'single-quoted text\''$str$
@@ -1162,7 +1176,54 @@ begin
     )
     select
         inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd) as cmd_line_actual
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd, false) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test2'
+            ,array['cmd2', '--opt']
+            ,''::hstore
+            ,E'Just one line\n'
+            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 -- cmd2 --opt$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test2'
+            ,'subid'
+            ,array['cmd2', '--opt']
+            ,''::hstore
+            ,E'Just one line\n'
+            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 subid -- cmd2 --opt$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
     from
         inserted
     into

@@ -66,16 +66,15 @@ int main(int argc, char** argv)
             }
             if (arg == "--exit-code")
             {
-                if (i == argc)
-                    throw std::runtime_error("Missing argument to --exit-code option");
-                //int exit_code = std::stoi(argv[++i]);
-                int exit_code = 0;
+                if (i + 1 == argc)
+                    throw CmdLineParseError("Missing argument to --exit-code option");
+                int exit_code = std::stoi(argv[++i]);
                 exit(exit_code);
             }
             else if (arg == "--exit-signal")
             {
-                if (i == argc - 1)
-                    throw std::runtime_error("Missing argument to --exit-signal option");
+                if (i + 1 == argc)
+                    throw CmdLineParseError("Missing argument to --exit-signal option");
                 int exit_signal = std::stoi(argv[++i]);
                 raise(exit_signal);
             }

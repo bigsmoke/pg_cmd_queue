@@ -42,6 +42,7 @@ public:
             const std::optional<std::string> &where,
             const std::optional<std::string> &order_by);
 
+    std::string update_stmt(const std::shared_ptr<PG::conn> &conn);
     static std::string update_stmt(const CmdQueue &cmd_queue);
 
     std::vector<std::optional<std::string>> update_params();

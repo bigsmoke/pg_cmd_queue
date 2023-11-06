@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 
+#include "base64.hpp"
 #include "pq-raii/libpq-raii.hpp"
 #include "cmdqueue.h"
 #include "fdguard.h"
@@ -76,6 +77,33 @@ std::string NixQueueCmd::select::notify(const CmdQueue &cmd_queue)
     return formatString(SELECT_TEMPLATE, cmd_queue.queue_cmd_relname.c_str(), "", "queued_since");
 }
 */
+
+std::string NixQueueCmd::update_stmt(const std::shared_ptr<PG::conn> &conn)
+{
+    return formatString(R"SQL(
+    UPDATE
+        %s
+    SET
+        cmd_runtime = tstzrange(to_timestamp(%f), to_timestamp(%f))
+        ,cmd_exit_code = %s
+        ,cmd_term_sig = %s
+        ,cmd_stdout = decode('%s', 'base64')
+        ,cmd_stderr = decode('%s', 'base64')
+    WHERE
+        cmd_id = '%s'
+        AND cmd_subid IS NOT DISTINCT from %s
+)SQL",
+            meta.queue_cmd_class.c_str(),
+            meta.cmd_runtime_start,
+            meta.cmd_runtime_end,
+            cmd_exit_code ? std::to_string(cmd_exit_code.value()).c_str() : "NULL",
+            cmd_term_sig ? std::to_string(cmd_term_sig.value()).c_str() : "NULL",
+            base64::to_base64(cmd_stdout).c_str(),
+            base64::to_base64(cmd_stderr).c_str(),
+            meta.cmd_id.c_str(),
+            meta.cmd_subid ? PQ::escapeLiteral(conn, meta.cmd_subid.value()).c_str() : "NULL"
+        );
+}
 
 std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue)
 {

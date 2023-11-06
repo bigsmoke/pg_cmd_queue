@@ -559,6 +559,33 @@ namespace PQ
     }
 
     inline std::string
+    escapeLiteral(const std::shared_ptr<PG::conn> &conn, const std::string &str)
+    {
+        char *raw_str = PQescapeLiteral(conn->get(), str.c_str(), str.size());
+        std::string to(raw_str);
+        PQfreemem(raw_str);
+        return to;
+    }
+
+    inline std::string
+    escapeStringConn(const std::shared_ptr<PG::conn> &conn, const std::string &from)
+    {
+        std::string to;
+        to.reserve(from.size() * 2 + 1);
+        PQescapeStringConn(conn->get(), to.data(), from.c_str(), from.size(), nullptr);
+        return to;
+    }
+
+    inline std::string
+    escapeString(const std::string &from)
+    {
+        std::string to;
+        to.reserve(from.size() * 2 + 1);
+        PQescapeString(to.data(), from.c_str(), from.size());
+        return to;
+    }
+
+    inline std::string
     double_quote(const std::string &unquoted)
     {
         static std::regex re("\"|\\\\");

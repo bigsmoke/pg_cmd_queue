@@ -232,7 +232,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
     }
 
     logger->log(
-        LOG_DEBUG3, "cmd_id = '%s'%s: \x1b[1m%s\x1b[22m",
+        LOG_INFO, "cmd_id = '%s'%s: \x1b[1m%s\x1b[22m",
         meta.cmd_id.c_str(),
         meta.cmd_subid ? std::string(" (cmd_subid = '" + meta.cmd_subid.value() + "')").c_str() : "",
         cmd_line().c_str()

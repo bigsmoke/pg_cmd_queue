@@ -52,6 +52,16 @@ const std::map<std::string, LogLevel> StringToLogLevel = {
     {"LOG_DEBUG5",  LOG_DEBUG5},
 };
 
+/**
+ * @brief Use as a temporary, so don't give a name. This makes the stream gets logged immediately.
+ */
+class StreamToLog : public std::ostringstream
+{
+    LogLevel level = LOG_NOTICE;
+public:
+    StreamToLog(LogLevel level);
+    ~StreamToLog();
+};
 
 class LogLine
 {
@@ -102,6 +112,7 @@ public:
     void log(LogLevel level, const char *str, ...);
     //void log(LogLevel level, const CmdQueue &cmd_queue, const char *str, va_list args);
     //void log(LogLevel level, const CmdQueue &cmd_queue, const char *str, ...);
+    StreamToLog logstream(LogLevel level);
 
     void queueReOpen();
     void noLongerLogToStd();

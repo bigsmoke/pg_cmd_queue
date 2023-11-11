@@ -14,6 +14,19 @@ Shamelessly copied/adapted from FlashMQ (https://www.flashmq.org)
 
 #include "utils.h"
 
+StreamToLog::StreamToLog(LogLevel level) :
+    level(level)
+{
+
+}
+
+StreamToLog::~StreamToLog()
+{
+    const std::string s = str();
+    Logger *logger = Logger::getInstance();
+    logger->log(this->level, s.c_str());
+}
+
 LogLine::LogLine(std::string &&line, bool alsoToStdOut) :
     line(line),
     alsoToStdOut(alsoToStdOut)
@@ -264,6 +277,21 @@ void Logger::log(LogLevel level, const char *str, ...)
     va_start(valist, str);
     this->log(level, str, valist);
     va_end(valist);
+}
+
+/**
+ * @brief Logger::log
+ * @param level
+ * @return a StreamToLog, that you're not suppose to name. When you don't, its destructor will log the stream.
+ *
+ * Allows logging like: logger->log(LOG_NOTICE) << "blabla: " << 1 << ".". The advantage is safety (printf crashes), and not forgetting printf arguments.
+ *
+ * Beware though: C++ streams chars as characters. When you have an uint8_t or int8_t that's also a char, and those need to be cast to int first. A good
+ * solution needs to be devised.
+ */
+StreamToLog Logger::logstream(LogLevel level)
+{
+    return StreamToLog(level);
 }
 
 /*

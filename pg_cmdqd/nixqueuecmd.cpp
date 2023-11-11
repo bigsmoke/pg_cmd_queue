@@ -524,7 +524,7 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
 
     if (res_pid < 0)
     {
-        this->cmd_term_sig = -1;
+        this->cmd_term_sig = -1;  // -1 to make it obvious that this term sig doesn't come from POSIX.
         this->cmd_stderr += formatString(
             "Unexpected error while calling `waitpid(%i, &wstatus, WNOHANG)`: '%s'",
             pid, strerror(errno)

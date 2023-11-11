@@ -361,16 +361,26 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
 
     int wstatus;
     int res_pid = 0;
+    bool reaped = false;
 
     while (true)
     {
-        // Let's check if maybe we were just interrupted by a SIGCHLD signal that we're interested in.
-        // Yes, I (Rowan) am missing `pidfd_open()` on MacOS :'-(
-        if ((res_pid = waitpid(pid, &wstatus, WNOHANG)) != 0) break;
-
         double now = QueueCmdMetadata::unix_timestamp();
-        int poll_timeout;
-        if (queue_cmd_timeout_sec == 0)
+        int poll_timeout = 0;
+
+        if (!reaped && (res_pid = waitpid(pid, &wstatus, WNOHANG)) != 0)
+        {
+            if (res_pid < 0)
+                break;
+            if (res_pid > 0)
+                reaped = true;
+        }
+
+        if (reaped)
+        {
+            poll_timeout = 0;
+        }
+        else if (queue_cmd_timeout_sec == 0)
         {
             poll_timeout = -1;
         }
@@ -393,6 +403,9 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         }
         if (fd_count == 0)
         {
+            if (reaped)
+                break;
+
             now = QueueCmdMetadata::unix_timestamp();
             if (now - meta.cmd_runtime_start >= queue_cmd_timeout_sec)
             {
@@ -506,7 +519,8 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         } // if (fd_count > 0)
     } // while (true)
 
-    if (res_pid == 0) res_pid = waitpid(pid, &wstatus, WNOHANG);
+    if (res_pid == 0)
+        res_pid = waitpid(pid, &wstatus, WNOHANG);
 
     if (res_pid < 0)
     {

@@ -683,7 +683,10 @@ namespace PQ
 
             if (start_pos > 0 and end_pos > 0)
             {
-                result.push_back(input.substr(start_pos, end_pos-start_pos+1));
+                std::string t = input.substr(start_pos, end_pos-start_pos+1);
+                t.erase(std::remove(t.begin(), t.end(), '\\'), t.end());
+
+                result.push_back(t);
 
                 if (next_start_pos == 0) break;
 

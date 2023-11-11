@@ -235,14 +235,17 @@ void Logger::log(LogLevel level, const char *str, va_list valist)
     const std::string s = oss.str();
     const char *logfmtstring = s.c_str();
 
-    constexpr const int buf_size = 512;
+    va_list valisttmp;
+    va_copy(valisttmp, valist);
+    const int buf_size = vsnprintf(nullptr, 0, logfmtstring, valisttmp);
+    va_end(valisttmp);
 
     char buf[buf_size + 1];
     buf[buf_size] = 0;
 
     va_list valist2;
     va_copy(valist2, valist);
-    vsnprintf(buf, buf_size, logfmtstring, valist);
+    vsnprintf(buf, buf_size, logfmtstring, valist2);
     size_t len = std::min<size_t>(buf_size, strlen(buf));
     LogLine line(buf, len, alsoLogToStd);
     va_end(valist2);

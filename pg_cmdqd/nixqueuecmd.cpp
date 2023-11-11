@@ -568,8 +568,8 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
             );
         if (cmd_term_sig.has_value())
             logger->log(LOG_ERROR, "Command %s terminated with signal: %i / %s", meta.cmd_id.c_str(), cmd_term_sig.value(), strsignal(cmd_term_sig.value()));
-
-        logger->log(LOG_DEBUG5, "Command %s STDOUT: %s", meta.cmd_id.c_str(), cmd_stdout.c_str());
-        logger->log(LOG_DEBUG5, "Command %s STDERR: %s", meta.cmd_id.c_str(), cmd_stderr.c_str());
     }
+
+    logger->logstream(LOG_DEBUG5) << "Command " << meta.cmd_id << " STDOUT: " << cmd_stdout;
+    logger->logstream(LOG_DEBUG5) << "Command " << meta.cmd_id << " STDERR: " << cmd_stderr;
 }

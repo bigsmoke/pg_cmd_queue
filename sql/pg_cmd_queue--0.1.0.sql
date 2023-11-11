@@ -1984,7 +1984,7 @@ begin
             ,E'This STDIN should be echoed to STDOUT,\nincluding this 2nd line.\n'::bytea
             ,0
             ,null
-                ,convert_to($out$This line should be sent to STDOUT.
+            ,convert_to($out$This line should be sent to STDOUT.
 This STDIN should be echoed to STDOUT,
 including this 2nd line.
 This line should be printed after the echoed STDIN.
@@ -1993,6 +1993,23 @@ This line should be squeezed between 2 env. variables.
 var2: with => signs, \ and "
 $out$, 'UTF8')
             ,convert_to(E'This line is to be sent to STDERR.\n', 'UTF8')
+        )
+        ,(
+            'cmd-with-funky-characters-in-argv'
+            ,null
+            ,array[
+                'nixtestcmd'
+                ,'--stdout-line'
+                ,'Let us check that `pg_cmdqd` unescapes quotes: """.'
+                ,'--exit-code'
+                ,'0'
+            ]
+            ,''::hstore
+            ,''::bytea
+            ,0
+            ,null
+            ,convert_to(E'Let us check that `pg_cmdqd` unescapes quotes: """.\n', 'UTF8')
+            ,convert_to('', 'UTF8')
         )
         ,(
             'cmd-exceeds-timeout-with-default-sigterm-action'

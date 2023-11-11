@@ -1094,7 +1094,7 @@ begin
                     string_agg(
                         var_name || '=' || case
                             when var_value ~ E'["$ \n\t`]' then
-                                '''' || replace(var_value, '''', '\''') || ''''
+                                '''' || replace(var_value, '''', '''\''''') || ''''
                             else
                                 var_value
                         end
@@ -1110,7 +1110,7 @@ begin
                 string_agg(
                     case
                         when arg ~ E'["$ \n\t`]' then
-                            '''' || replace(arg, '''', '\''') || ''''
+                            '''' || replace(arg, '''', '''\''''') || ''''
                         else
                             arg
                     end
@@ -1166,10 +1166,10 @@ begin
         insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
         values (
             'test1'
-            ,array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted text''']
+            ,array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted'' text']
             ,'VAR1=>"value 1", VAR_TWO=>val2'::hstore
             ,E'Multiline\ntext\n'
-            ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with \'single-quoted text\''$str$
+            ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with '\''single-quoted'\'' text'$str$
         )
         returning
             *

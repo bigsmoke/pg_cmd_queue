@@ -250,7 +250,7 @@ void Logger::log(LogLevel level, const char *str, va_list valist)
 
     va_list valisttmp;
     va_copy(valisttmp, valist);
-    const int buf_size = vsnprintf(nullptr, 0, logfmtstring, valisttmp);
+    const int buf_size = vsnprintf(nullptr, 0, logfmtstring, valisttmp) + 1;
     va_end(valisttmp);
 
     char buf[buf_size + 1];

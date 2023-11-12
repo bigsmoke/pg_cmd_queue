@@ -1025,7 +1025,10 @@ create table nix_queue_cmd_template (
         check (array_length(cmd_argv, 1) >= 1)
     ,cmd_env hstore
         not null
+        default ''::hstore
     ,cmd_stdin bytea
+        not null
+        default ''::bytea
     ,cmd_exit_code int
     ,cmd_term_sig int
     ,cmd_stdout bytea

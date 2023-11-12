@@ -63,6 +63,8 @@ const std::map<LogLevel, std::string> LogLevelToString = []() -> std::map<LogLev
     return m;
 }();
 
+std::string normalize_log_level(const std::string &str);
+
 /**
  * @brief Use as a temporary, so don't give a name. This makes the stream gets logged immediately.
  */

@@ -103,7 +103,7 @@ int main(int argc, char **argv)
     try
     {
         const char *log_level = std::getenv("PG_CMDQD_LOG_LEVEL");
-        const std::string log_level_from_env(log_level ? log_level : "");
+        const std::string log_level_from_env(log_level ? normalize_log_level(log_level) : "");
 
         if (!log_level_from_env.empty())
         {
@@ -142,9 +142,7 @@ int main(int argc, char **argv)
                 if (i == argc-1)
                     throw CmdLineParseError("Missing \x1b[1m<log_level>\x1b[22m argument to \x1b[1m--log-level\x1b[22m option.");
                 std::string log_level_arg(argv[++i]);
-
-                if (log_level_arg.substr(0, 4) == "LOG_")
-                    log_level_arg = log_level_arg = log_level_arg.substr(4);
+                log_level_arg = normalize_log_level(log_level_arg);
 
                 if (StringToLogLevel.count(log_level_arg) == 0)
                     throw CmdLineParseError(std::string("Unrecognized log level: ") + log_level_arg);

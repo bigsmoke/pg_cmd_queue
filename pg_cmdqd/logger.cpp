@@ -14,6 +14,13 @@ Shamelessly copied/adapted from FlashMQ (https://www.flashmq.org)
 
 #include "utils.h"
 
+std::string normalize_log_level(const std::string &str)
+{
+    if (str.substr(0, 4) == "LOG_")
+        return str.substr(4);
+    return str;
+}
+
 StreamToLog::StreamToLog(LogLevel level) :
     level(level)
 {

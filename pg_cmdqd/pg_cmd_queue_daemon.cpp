@@ -30,7 +30,6 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << "    \x1b[1m" << basename(program_name) << "\x1b[22m \x1b[1m--help\x1b[22m | \x1b[1m-h\x1b[22m" << std::endl
         << std::endl
         << "Options:" << std::endl
-        // TODO: List log levels
         << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
         << "    \x1b[1m--log-times\x1b[22m | \x1b[1m--no-log-times\x1b[22m      Include the time in log messages (the default), or not." << std::endl
         << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated for every queue you want to run." << std::endl

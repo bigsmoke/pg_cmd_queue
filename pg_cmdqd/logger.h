@@ -6,11 +6,12 @@
 #include <stdarg.h>
 
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
-#include <map>
+#include <unordered_map>
 
 #include "cmdqueue.h"
 
@@ -36,21 +37,31 @@ enum LogLevel {
     LOG_DEBUG5  = 0b00000000000000000000111111111111,       // LOG_DEBUG   in syslog
 };
 
-const std::map<std::string, LogLevel> StringToLogLevel = {
-    {"LOG_NONE",    LOG_NONE},
-    {"LOG_PANIC",   LOG_PANIC},
-    {"LOG_FATAL",   LOG_FATAL},
-    {"LOG_LOG",     LOG_LOG},
-    {"LOG_ERROR",   LOG_ERROR},
-    {"LOG_WARNING", LOG_WARNING},
-    {"LOG_NOTICE",  LOG_NOTICE},
-    {"LOG_INFO",    LOG_INFO},
-    {"LOG_DEBUG1",  LOG_DEBUG1},
-    {"LOG_DEBUG2",  LOG_DEBUG2},
-    {"LOG_DEBUG3",  LOG_DEBUG3},
-    {"LOG_DEBUG4",  LOG_DEBUG4},
-    {"LOG_DEBUG5",  LOG_DEBUG5},
+const std::unordered_map<std::string, LogLevel> StringToLogLevel = {
+    {"DEBUG1",  LOG_DEBUG1},
+    {"DEBUG2",  LOG_DEBUG2},
+    {"DEBUG3",  LOG_DEBUG3},
+    {"DEBUG4",  LOG_DEBUG4},
+    {"DEBUG5",  LOG_DEBUG5},
+    {"ERROR",   LOG_ERROR},
+    {"FATAL",   LOG_FATAL},
+    {"INFO",    LOG_INFO},
+    {"LOG",     LOG_LOG},
+    {"NONE",    LOG_NONE},
+    {"NOTICE",  LOG_NOTICE},
+    {"PANIC",   LOG_PANIC},
+    {"WARNING", LOG_WARNING},
 };
+
+const std::map<LogLevel, std::string> LogLevelToString = []() -> std::map<LogLevel, std::string>
+{
+    std::map<LogLevel, std::string> m;
+    if (m.size() == 0)
+        for (auto it = StringToLogLevel.begin(); it != StringToLogLevel.end(); ++it)
+            m.emplace((*it).second, (*it).first);
+
+    return m;
+}();
 
 /**
  * @brief Use as a temporary, so don't give a name. This makes the stream gets logged immediately.

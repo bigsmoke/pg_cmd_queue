@@ -29,20 +29,39 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << "    \x1b[1m" << basename(program_name) << "\x1b[22m [ \x1b[1moptions\x1b[22m ] \x1b[1m<connection_string>\x1b[22m" << std::endl
         << "    \x1b[1m" << basename(program_name) << "\x1b[22m \x1b[1m--help\x1b[22m | \x1b[1m-h\x1b[22m" << std::endl
         << std::endl
+        << "Options:" << std::endl
+        // TODO: List log levels
+        << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
+        << "    \x1b[1m--log-times\x1b[22m | \x1b[1m--no-log-times\x1b[22m      Include the time in log messages (the default), or not." << std::endl
+        << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated for every queue you want to run." << std::endl
+        << "    \x1b[1m--emit-sigusr1-when-ready\x1b[22m" << std::endl
+        << std::endl
         << "\x1b[1m<connection_string>\x1b[22m" << std::endl
         << "    Can be in keyword/value or in URI format, as per the libpq documentation:" << std::endl
-        << "    \x1b[4mhttps://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING\x1b[24m" << std::endl
+        << "    \x1b[4;34mhttps://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING\x1b[24;0m" << std::endl
         << std::endl
         << "    Thanks to libpq, most connection parameter values can also be set via" << std::endl
         << "    environment variables:"
-        << " \x1b[4mhttps://www.postgresql.org/docs/current/libpq-envars.html\x1b[24m" << std::endl
+        << " \x1b[4;34mhttps://www.postgresql.org/docs/current/libpq-envars.html\x1b[24;0m" << std::endl
         << std::endl
-        << "Options:" << std::endl
-        << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
-        << "    \x1b[1m--log-times\x1b[22m | \x1b[1m--no-log-times\x1b[22m" << std::endl
-        << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated." << std::endl
-        << "    \x1b[1m--emit-sigusr1-when-ready\x1b[22m" << std::endl
-        << std::endl;
+        << "\x1b[1m<log_level>\x1b[22m" << std::endl
+        << "    Each next/higher log level includes the previous/lower log levels:" << std::endl
+        << "    ";
+    for (auto it = LogLevelToString.begin(); it != LogLevelToString.end(); ++it)
+    {
+        stream << "\x1b[1m" << (*it).second << "\x1b[22m";
+        if (std::distance(it, LogLevelToString.end()) != 1)
+            stream << " | ";
+        else
+            stream << std::endl;
+    }
+    stream << std::endl
+        << "    You are free to put a \x1b[1mLOG_\x1b[22m prefix in front of the message severity level." << std::endl
+        << std::endl
+        << "    Except for \x1b[1mNONE\x1b[22m, these log levels are identical to Postgres' own “Message Severity Levels”:" << std::endl
+        << "    \x1b[4;34mhttps://www.postgresql.org/docs/current/runtime-config-logging.html#RUNTIME-CONFIG-LOGGING-WHEN\x1b[24;0m" << std::endl
+        << std::endl
+        << "    The default log level is \x1b[1mINFO\x1b[22m (unlike Postgres itself, where it is \x1b[1mWARNING\x1b[22m." << std::endl;
 }
 
 class CmdLineParseError : std::exception
@@ -123,9 +142,15 @@ int main(int argc, char **argv)
             {
                 if (i == argc-1)
                     throw CmdLineParseError("Missing \x1b[1m<log_level>\x1b[22m argument to \x1b[1m--log-level\x1b[22m option.");
-                if (StringToLogLevel.count(argv[++i]) == 0)
-                    throw CmdLineParseError(std::string("Unrecognized log level: ") + argv[i]);
-                logger->setLogLevel( StringToLogLevel.at(argv[i]) );
+                std::string log_level_arg(argv[++i]);
+
+                if (log_level_arg.substr(0, 4) == "LOG_")
+                    log_level_arg = log_level_arg = log_level_arg.substr(4);
+
+                if (StringToLogLevel.count(log_level_arg) == 0)
+                    throw CmdLineParseError(std::string("Unrecognized log level: ") + log_level_arg);
+
+                logger->setLogLevel( StringToLogLevel.at(log_level_arg) );
             }
             else if (std::string(argv[i]) == "--cmd-queue")
             {

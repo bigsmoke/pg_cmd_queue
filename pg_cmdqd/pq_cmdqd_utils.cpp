@@ -1,4 +1,7 @@
+#include <signal.h>
+
 #include "pq_cmdqd_utils.h"
+#include "sigstate.h"
 
 void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> &conn)
 {
@@ -17,7 +20,7 @@ void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> 
             logger->log(LOG_DEBUG1, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[22m environment variables…");
 
         int connect_retry_seconds = 1;
-        while (true)
+        while (not sig_num_received({SIGQUIT, SIGTERM, SIGINT}))
         {
             conn = PQ::connectdb(conn_str);
             if (PQ::status(conn) == CONNECTION_OK)
@@ -40,7 +43,7 @@ void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> 
     {
         // TODO: It would probably be better to exit the thread and let the main thread restart it when needed
         int connect_retry_seconds = 1;
-        while (true)
+        while (not sig_num_received({SIGQUIT, SIGTERM, SIGINT}))
         {
             PQ::reset(conn);
             if (PQ::status(conn) == CONNECTION_OK)

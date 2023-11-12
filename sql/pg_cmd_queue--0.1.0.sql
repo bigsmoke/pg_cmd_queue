@@ -374,6 +374,14 @@ create table cmd_queue (
     ,queue_select_timeout interval
         default '10 seconds'::interval
     ,queue_cmd_timeout interval
+    /*
+    ,queue_runner_range int4range
+        not null
+        default int4range(1, 2)
+    */
+    ,queue_is_enabled bool
+        not null
+        default true
     ,queue_wait_time_limit_warn interval
     ,queue_wait_time_limit_crit interval
     ,queue_created_at timestamptz

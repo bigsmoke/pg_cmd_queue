@@ -86,8 +86,8 @@ SET
     cmd_runtime = tstzrange(to_timestamp(%f), to_timestamp(%f))
     ,cmd_exit_code = %s
     ,cmd_term_sig = %s
-    ,cmd_stdout = E'%s'
-    ,cmd_stderr = E'%s'
+    ,cmd_stdout = '%s'
+    ,cmd_stderr = '%s'
 WHERE
     cmd_id = '%s'
     AND cmd_subid IS NOT DISTINCT from %s

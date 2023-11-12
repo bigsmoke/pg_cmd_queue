@@ -29,7 +29,7 @@ const std::string CmdQueue::SELECT_STMT = R"SQL(
     CROSS JOIN LATERAL
         cmdq.queue_cmd_class_color(queue_cmd_class) as color
     WHERE
-        NULLIF($1, '{}'::text[]) IS NULL OR queue_cmd_class = ANY ($1::regclass[])
+        (NULLIF($1, '{}'::text[]) IS NULL OR queue_cmd_class = ANY ($1::regclass[]))
         AND queue_is_enabled
 )SQL";
 

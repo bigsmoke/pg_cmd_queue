@@ -628,11 +628,12 @@ namespace PQ
 
     /**
      * Convert a PostgreSQL array in text form to a vector of strings representing the array member values.
+     *
+     * We can deal with the string as single (ASCII) bytes, because of the beautiful elegance of UTF-8.
      */
     inline std::vector<std::string>
     from_text_array(const std::string &input)
     {
-        // TODO: UTF-8 wierdnesses; and check Postgres' own parsing
         std::vector<std::string> result;
         int depth = 0;
         bool in_quotes = false;

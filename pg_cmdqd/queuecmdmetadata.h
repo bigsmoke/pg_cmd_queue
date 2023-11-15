@@ -17,8 +17,8 @@ protected:
     bool _is_valid = false;
 
 public:
-    std::string queue_cmd_class;
-    std::string queue_cmd_relname;
+    std::string cmd_class_identity;
+    std::string cmd_class_relname;
     std::string cmd_id;
     std::optional<std::string> cmd_subid;
 
@@ -34,7 +34,8 @@ public:
             const std::unordered_map<std::string, int> &fieldMapping
         ) noexcept;
     QueueCmdMetadata(
-        const std::string &queue_cmd_class,
+        const std::string &cmd_class_identity,
+        const std::string &cmd_class_relname,
         const std::string &cmd_id,
         const std::optional<std::string> &cmd_subid
     );

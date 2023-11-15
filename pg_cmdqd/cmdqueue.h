@@ -16,13 +16,26 @@ public:
     static const std::string CMD_QUEUE_RELNAME;
     static const std::string SELECT_STMT;
 
-    std::string queue_cmd_relname;
-    std::string queue_cmd_class_qualified;
-
-    /*
-     * The local part of the queue's template table name.
+    /**
+     * The schema-qualified name of the relationship holding the queue, quoted where necessary.
+     *
+     * The term “identity” has been chosen, because `identity` is in fact also
+     * the name of the field returned by the `pg_identify_object()` function
+     * that we use.
      */
-    std::string queue_signature_class;
+    std::string cmd_class_identity;
+
+    /**
+     * The unquoted schema-local name of the relationship with the queue commands.
+     *
+     * The suffix is `_relname` was chosen for consistency with Postgres' `pg_class` catalog.
+     */
+    std::string cmd_class_relname;
+
+    /**
+     * The local part of the queue command template table name.
+     */
+    std::string cmd_signature_class_relname;
 
     std::optional<std::string> queue_runner_role;
     std::optional<std::string> queue_notify_channel;

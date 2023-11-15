@@ -248,7 +248,7 @@ void Logger::log(LogLevel level, const char *str, va_list valist)
     std::string str_(str);
     if (cmd_queue != nullptr) oss << "\x1b" << cmd_queue->ansi_fg;
     if (logTimes) oss << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] ";
-    if (cmd_queue != nullptr) oss << "[" << cmd_queue->queue_cmd_relname << "] ";
+    if (cmd_queue != nullptr) oss << "[" << cmd_queue->cmd_class_identity << "] ";
     oss << "[" << getLogLevelString(level) << "] " << str_;
     if (cmd_queue != nullptr) oss << "\x1b[0m";
     oss.flush();
@@ -314,7 +314,7 @@ void Logger::log(LogLevel level, const CmdQueue &cmd_queue, const char *str, va_
 
     std::string str_(str);
     oss << "\x1b" << cmd_queue.ansi_fg << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] ["
-        << cmd_queue.queue_cmd_relname << "] [" << getLogLevelString(level) << "] " << str_ << "\x1b[0m";
+        << cmd_queue.cmd_class_identity << "] [" << getLogLevelString(level) << "] " << str_ << "\x1b[0m";
     oss.flush();
     const std::string s = oss.str();
     const char *logfmtstring = s.c_str();

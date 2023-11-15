@@ -16,7 +16,7 @@ that matches the signature of either:
 
 Each queue must be registered with the [`cmd_queue`](#table-cmd_queue) table.
 That tells the `pg_cmd_queue_runner` daemon where to look for each queue and
-how to connect.
+how to run each queue.
 
 `pg_cmd_queue` does _not_ come with any preconfigured queues.
 
@@ -56,7 +56,7 @@ which does not immediately need to support a high throughput, a view will
 often be the simplest.  See the [`test__pg_cmd_queue()`
 procedure](#procedure-test__pg_cmd_queue) for a full example.
 
-When creating your own `_queue_cmd` tables or views, you may add additional
+When creating your own `_cmd` tables or views, you may add additional
 columns of your own, _after_ the columns that are specified by the
 `_<cmd_type>_queue_cmd_template` that you choose to use.  Note that your custom
 column names are _not_ allowed to start with `queue_` or `cmd_`.
@@ -78,13 +78,19 @@ variables:
 
 * Helpers for setting up partitioning for table-based queues, to easily get rid
   of table bloat.
+* Allow per-queue configuration of effective user and group to run *nix commands
+  as?  Or should we “just” shelve off this functionality to `sudo` and the
+  likes?
+* `http_queue_cmd_template` support using `libcurl` would be f-ing awesome.
 * `pg_cron`'s `cron` schema compatibility, so that you can use `pg_cron` without
   using `pg_cron`. 😉
+* pgAgent schema compatibility, so that you can set up pgAgent jobs (in pgAdmin,
+  for example) without having to run pgAgent.
 
 ## Features that will _not_ be part of `pg_cmd_queue`
 
 * There will be no logging in `pg_cmd_queue`.  How to handle successes and
-  failures is up to triggers on the `queue_cmd_class` tables or views which
+  failures is up to triggers on the `cmd_class` tables or views which
   will be updated by the `pg_cmd_queue_runner` daemon after running a command.
 
 * There will be no support for SQL callbacks, not even in `sql_queue_cmd`
@@ -346,24 +352,20 @@ $md$;
 --------------------------------------------------------------------------------------------------------------
 
 create table cmd_queue (
-    queue_cmd_class regclass
+    cmd_class regclass
         primary key
         check (
-            (parse_ident(queue_cmd_class::text))[
-                array_upper(parse_ident(queue_cmd_class::text), 1)
+            (parse_ident(cmd_class::text))[
+                array_upper(parse_ident(cmd_class::text), 1)
             ] ~ '^[a-z][a-z0-9_]+_cmd$'
         )
-    ,queue_signature_class regclass
+    ,cmd_signature_class regclass
         not null
         check (
-            (parse_ident(queue_signature_class::text))[
-                array_upper(parse_ident(queue_signature_class::text), 1)
+            (parse_ident(cmd_signature_class::text))[
+                array_upper(parse_ident(cmd_signature_class::text), 1)
             ] in ('nix_queue_cmd_template', 'sql_queue_cmd_template')
         )
-    /*
-    ,queue_runner_euid text
-    ,queue_runner_egid text
-    */
     ,queue_runner_role name
     ,queue_notify_channel name
     ,queue_reselect_interval interval
@@ -453,13 +455,13 @@ begin
     if tg_op = 'DELETE' then
         execute format(
             'DROP CAST (%2$s AS %1$s)'
-            ,OLD.queue_signature_class::text
-            ,OLD.queue_cmd_class::text
+            ,OLD.cmd_signature_class::text
+            ,OLD.cmd_class::text
         );
         execute format(
             'DROP FUNCTION %1$s(%2$s)'
-            ,OLD.queue_signature_class::text
-            ,OLD.queue_cmd_class::text
+            ,OLD.cmd_signature_class::text
+            ,OLD.cmd_class::text
         );
     end if;
 
@@ -470,15 +472,15 @@ begin
         then
             execute format(
                 'ALTER EXTENSION %3$I DROP FUNCTION %1$s(%2$s)'
-                ,NEW.queue_signature_class::text
-                ,NEW.queue_cmd_class::text
+                ,NEW.cmd_signature_class::text
+                ,NEW.cmd_class::text
                 ,NEW.pg_extension_name
             );
             if _extension_context is not null then
                 execute format(
                     'ALTER EXTENSION %3$I ADD FUNCTION %1$s(%2$s)'
-                    ,NEW.queue_signature_class::text
-                    ,NEW.queue_cmd_class::text
+                    ,NEW.cmd_signature_class::text
+                    ,NEW.cmd_class::text
                     ,_extension_context
                 );
             end if;
@@ -490,15 +492,15 @@ begin
             ' SET search_path FROM CURRENT'
             ' IMMUTABLE LEAKPROOF PARALLEL SAFE LANGUAGE SQL'
             ' AS $sql$SELECT null::%1$s #= hstore($1);$sql$'
-            ,NEW.queue_signature_class::text
-            ,NEW.queue_cmd_class::text
+            ,NEW.cmd_signature_class::text
+            ,NEW.cmd_class::text
         );
 
         if _extension_context is not null and _extension_context is distinct from NEW.pg_extension_name then
             execute format(
                 'ALTER EXTENSION %3$I DROP FUNCTION %1$s(%2$s)'
-                ,NEW.queue_signature_class::text
-                ,NEW.queue_cmd_class::text
+                ,NEW.cmd_signature_class::text
+                ,NEW.cmd_class::text
                 ,_extension_context
             );
         end if;
@@ -507,8 +509,8 @@ begin
         then
             execute format(
                 'ALTER EXTENSION %3$I ADD FUNCTION %1$s(%2$s)'
-                ,NEW.queue_signature_class::text
-                ,NEW.queue_cmd_class::text
+                ,NEW.cmd_signature_class::text
+                ,NEW.cmd_class::text
                 ,NEW.pg_extension_name
             );
         end if;
@@ -517,14 +519,14 @@ begin
     if tg_op = 'INSERT' then
         execute format(
             'CREATE CAST (%2$s AS %1$s) WITH FUNCTION %1$s(%2$s) AS IMPLICIT'
-            ,NEW.queue_signature_class::text
-            ,NEW.queue_cmd_class::text
+            ,NEW.cmd_signature_class::text
+            ,NEW.cmd_class::text
         );
         if _extension_context is not null and _extension_context is distinct from NEW.pg_extension_name then
             execute format(
                 'ALTER EXTENSION %3$I DROP CAST (%2$s AS %1$s)'
-                ,NEW.queue_signature_class::text
-                ,NEW.queue_cmd_class::text
+                ,NEW.cmd_signature_class::text
+                ,NEW.cmd_class::text
                 ,_extension_context
             );
         end if;
@@ -533,8 +535,8 @@ begin
         then
             execute format(
                 'ALTER EXTENSION %3$I ADD CAST (%2$s AS %1$s)'
-                ,NEW.queue_signature_class::text
-                ,NEW.queue_cmd_class::text
+                ,NEW.cmd_signature_class::text
+                ,NEW.cmd_class::text
                 ,NEW.pg_extension_name
             );
         end if;
@@ -576,7 +578,7 @@ begin
     from
         pg_catalog.pg_attribute
     where
-        attrelid = NEW.queue_signature_class
+        attrelid = NEW.cmd_signature_class
         and attnum > 1
     ;
     _signature_attr_count := array_length(_signature_attrs, 1);
@@ -588,7 +590,7 @@ begin
     from
         pg_catalog.pg_attribute
     where
-        attrelid = NEW.queue_cmd_class
+        attrelid = NEW.cmd_class
         and attnum > 1
     ;
 
@@ -597,8 +599,8 @@ begin
             message = format(
                 'The first %s columns of the queue table `%s` do not match the `%s` signature table.'
                 ,_signature_attr_count
-                ,NEW.queue_cmd_class
-                ,NEW.queue_signature_class
+                ,NEW.cmd_class
+                ,NEW.cmd_signature_class
             )
             ,detail = format('%s ≠ %s', _queue_rel_attrs[1:_signature_attr_count], _signature_attrs)
             ,hint = format(
@@ -640,13 +642,13 @@ create function cmd_queue__notify_daemon_of_changes()
     as $$
 declare
     _channel text := pg_cmd_queue_notify_channel();
-    _queue_cmd_identity text := (
+    _cmd_class_identity text := (
         select
             i.identity
         from
             pg_identify_object(
                 'pg_class'::regclass
-                ,coalesce(NEW.queue_cmd_class, OLD.queue_cmd_class)
+                ,coalesce(NEW.cmd_class, OLD.cmd_class)
                 ,0
             ) as i
     );
@@ -657,7 +659,7 @@ begin
     assert tg_table_schema = 'cmdq';
     assert tg_table_name = 'cmd_queue';
 
-    perform pg_notify(_channel, row(tg_table_name, _queue_cmd_identity, tg_op)::text);
+    perform pg_notify(_channel, row(tg_table_name, _cmd_class_identity, tg_op)::text);
 
     return null;
 end;
@@ -671,7 +673,7 @@ create trigger notify_daemon_of_changes
 
 --------------------------------------------------------------------------------------------------------------
 
-create function queue_cmd_class_color(regclass)
+create function cmd_class_color(regclass)
     returns table (
         r int
         ,g int
@@ -694,7 +696,7 @@ begin atomic
     )
     ,hash as (
         select
-            md5(fully_qualified_name) as queue_cmd_class_hash
+            md5(fully_qualified_name) as cmd_class_hash
         from
             fqn
     )
@@ -713,7 +715,7 @@ begin atomic
     )
     ,number as (
         select
-            ('x' || substring(md5(queue_cmd_class_hash), 1, 3))::bit(11)::int as hash_no
+            ('x' || substring(md5(cmd_class_hash), 1, 3))::bit(11)::int as hash_no
         from
             hash
     )
@@ -740,9 +742,9 @@ end;
 --------------------------------------------------------------------------------------------------------------
 
 create table queue_cmd_template (
-    queue_cmd_class regclass
+    cmd_class regclass
         not null
-        references cmd_queue (queue_cmd_class)
+        references cmd_queue (cmd_class)
             on delete cascade
             on update cascade
     ,cmd_id text
@@ -760,9 +762,9 @@ $md$Uniquely identifies an individual command in the queue (unless if `cmd_subid
 
 When a single key in the underlying object of a queue command is sufficient to
 identify it, a `::text` representation of the key should go into this column.
-If multiple keys are needed, for example, when the underlying object has a
+If multiple keys are needed—for example, when the underlying object has a
 multi-column primary key or when each underlying object can simultaneously
-appear in multiple commands the queue, you will want to use `cmd_subid` in
+appear in multiple commands the queue—you will want to use `cmd_subid` in
 addition to `cmd_id`.
 $md$;
 
@@ -824,7 +826,7 @@ declare
         nullif(current_setting('pg_cmd_queue.notify_channel', true), '')
         ,'cmdq'
     );
-    _queue_cmd_class_qualified text := quote_ident(tg_table_schema) || '.' || quote_ident(tg_table_name);
+    _cmd_class_qualified text := quote_ident(tg_table_schema) || '.' || quote_ident(tg_table_name);
     _cmd_id_expression name := '($1).cmd_id::text';
     _cmd_subid_expression name := '($1).cmd_subid::text';
     _cmd_id text;
@@ -840,7 +842,7 @@ begin
         _queue_notify_channel := coalesce(nullif(tg_argv[0], 'DEFAULT'), _queue_notify_channel);
     end if;
     if tg_nargs > 1 then
-        _queue_cmd_class_qualified := coalesce(nullif(tg_argv[1], 'DEFAULT'), _queue_cmd_class_qualified);
+        _cmd_class_qualified := coalesce(nullif(tg_argv[1], 'DEFAULT'), _cmd_class_qualified);
     end if;
     if tg_nargs > 2 then
         _cmd_id_expression := case
@@ -871,7 +873,7 @@ begin
         execute 'SELECT ' || _cmd_subid_expression using OLD into _cmd_subid;
     end if;
 
-    perform pg_notify(_queue_notify_channel, row(_queue_cmd_class_qualified, _cmd_id, _cmd_subid)::text);
+    perform pg_notify(_queue_notify_channel, row(_cmd_class_qualified, _cmd_id, _cmd_subid)::text);
 
     return null;
 end;
@@ -1134,7 +1136,7 @@ begin
                             array[
                                 'pg_nix_queue_cmd'
                                 ,'--output-update'
-                                ,(pg_identify_object('pg_class'::regclass, ($1).queue_cmd_class, 0)).identity
+                                ,(pg_identify_object('pg_class'::regclass, ($1).cmd_class, 0)).identity
                                 ,($1).cmd_id
                                 ,($1).cmd_subid
                                 ,'--'
@@ -1165,10 +1167,10 @@ begin
             not null
     ) on commit drop;
     alter table tst_nix_cmd
-        alter column queue_cmd_class
+        alter column cmd_class
             set default to_regclass('tst_nix_cmd');
     insert into cmd_queue
-        (queue_cmd_class, queue_signature_class)
+        (cmd_class, cmd_signature_class)
     values
         ('tst_nix_cmd', 'nix_queue_cmd_template')
     ;
@@ -1460,8 +1462,8 @@ begin
     <<incompatible_view_signature>>
     begin
         insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
+            cmd_class
+            ,cmd_signature_class
             ,queue_reselect_interval
             ,queue_wait_time_limit_warn
             ,queue_wait_time_limit_crit
@@ -1596,8 +1598,8 @@ begin
         execute function cmdq.wobbie_user_password_reset_mail_cmd__instead_of_update();
 
     insert into cmd_queue (
-        queue_cmd_class
-        ,queue_signature_class
+        cmd_class
+        ,cmd_signature_class
         ,queue_reselect_interval
         ,queue_wait_time_limit_warn
         ,queue_wait_time_limit_crit
@@ -1808,8 +1810,8 @@ begin
             execute function cmdq.wobbie_user_confirmation_mail_cmd__instead_of_update();
 
         insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
+            cmd_class
+            ,cmd_signature_class
             ,queue_reselect_interval
             ,queue_wait_time_limit_warn
             ,queue_wait_time_limit_crit
@@ -1930,7 +1932,7 @@ begin
                 including all
         );
         alter table tst_nix_cmd
-            alter column queue_cmd_class set default 'tst_nix_cmd';
+            alter column cmd_class set default 'tst_nix_cmd';
 
         create table tst_nix_cmd__expect (
             like tst_nix_cmd
@@ -2127,8 +2129,8 @@ $out$, 'UTF8')
         end insert_in_queue_before_registering_queue;
 
         insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
+            cmd_class
+            ,cmd_signature_class
             ,queue_runner_role
             ,queue_notify_channel
             ,queue_reselect_interval
@@ -2195,7 +2197,7 @@ $out$, 'UTF8')
         end loop single_cmd;
 
     elsif test_stage$ = 'teardown' then
-        delete from cmd_queue where queue_cmd_class = 'cmdq.tst_nix_cmd'::regclass;
+        delete from cmd_queue where cmd_class = 'cmdq.tst_nix_cmd'::regclass;
         drop table tst_nix_cmd cascade;
         drop table tst_nix_cmd__actual cascade;
         drop table tst_nix_cmd__expect cascade;
@@ -2206,7 +2208,7 @@ $$;
 ----------------------------------------------------------------------------------------------------------
 
 create procedure run_sql_cmd_queue(
-        queue_cmd_class$ regclass
+        cmd_class$ regclass
         ,max_iterations$ bigint default null
         ,iterate_until_empty$ bool default true
         ,queue_reselect_interval$ interval default null
@@ -2234,7 +2236,7 @@ declare
     _iteration_start_time timestamptz;
     _queue_reselect_interval interval;
 begin
-    select q.* into _cmd_queue from cmd_queue as q where q.queue_cmd_class = queue_cmd_class$;
+    select q.* into _cmd_queue from cmd_queue as q where q.cmd_class = cmd_class$;
 
     _queue_reselect_interval := coalesce(queue_reselect_interval$, _cmd_queue.queue_reselect_interval);
 
@@ -2262,7 +2264,7 @@ begin
         perform set_config('statement_timeout', _select_timeout_ms::text, true);
         execute format(
             'SELECT * FROM %s ORDER BY cmd_queued_since LIMIT 1 %s'
-            ,_cmd_queue.queue_cmd_class
+            ,_cmd_queue.cmd_class
             ,case when lock_rows_for_update$ then 'FOR UPDATE SKIP LOCKED' else '' end
         ) into _sql_queue_cmd;
 
@@ -2278,7 +2280,7 @@ begin
         begin
             perform set_config('statement_timeout', _cmd_timeout_ms::text, true);
             raise debug using
-                message = format('Executing %s', _cmd_queue.queue_cmd_class)
+                message = format('Executing %s', _cmd_queue.cmd_class)
                 ,detail = jsonb_pretty(to_jsonb(_sql_queue_cmd));
             _cmd_sql_result_rows := null::jsonb;
             for _cmd_sql_result_row in execute _sql_queue_cmd.cmd_sql loop
@@ -2318,7 +2320,7 @@ begin
                 _cmd_sql_fatal_error.pg_diag_severity_nonlocalized := 'EXCEPTION';
 
                 raise debug using
-                    message = format('%s failed', _cmd_queue.queue_cmd_class::regclass::text)
+                    message = format('%s failed', _cmd_queue.cmd_class::regclass::text)
                     ,detail = jsonb_pretty(to_jsonb(_cmd_sql_fatal_error))::text;
         end run_sql_cmd;
 
@@ -2335,7 +2337,7 @@ WHERE
     cmd_id = %L
     AND cmd_subid IS NOT DISTINCT FROM %s
 $sql$
-            ,_cmd_queue.queue_cmd_class
+            ,_cmd_queue.cmd_class
             ,_cmd_start_time, clock_timestamp()
             ,_cmd_sql_result_status
             ,_cmd_sql_fatal_error
@@ -2388,7 +2390,7 @@ begin
     if ($1).cmd_id is null then
         execute format(
             'SELECT c.* FROM %s'
-            ,($1).queue_cmd_class
+            ,($1).cmd_class
         ) into $1;
     end if;
 end;

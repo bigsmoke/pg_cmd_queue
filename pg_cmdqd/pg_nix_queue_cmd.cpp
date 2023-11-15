@@ -29,7 +29,7 @@ void usage(const char* program_name, std::ostream &stream = std::cout)
 UPDATE statement as it would be performed by the daemon.
 
 Usage:
-    )" << program_name << R"( [ options ] <queue_cmd_class> <cmd_id> [ <cmd_subid> ] [ -- <cmd_arg>... ]
+    )" << program_name << R"( [ options ] <cmd_class> <cmd_id> [ <cmd_subid> ] [ -- <cmd_arg>... ]
     )" << program_name << R"( --help
 
 Options:
@@ -42,7 +42,7 @@ int main(const int argc, const char *argv[])
 {
     bool output_update_statement = false;
     bool exec_update_statement = false;
-    std::string queue_cmd_class;
+    std::string cmd_class;
     std::string cmd_id;
     std::optional<std::string> cmd_subid;
     int cmd_meta_fields_identified = 0;
@@ -70,7 +70,7 @@ int main(const int argc, const char *argv[])
             else if (arg.substr(0, 2) != "--")
             {
                 if (++cmd_meta_fields_identified == 1)
-                    queue_cmd_class = argv[i];
+                    cmd_class = argv[i];
                 else if (cmd_meta_fields_identified == 2)
                     cmd_id = argv[i];
                 else if (cmd_meta_fields_identified == 3)
@@ -106,7 +106,7 @@ int main(const int argc, const char *argv[])
     if (not isatty(STDIN_FILENO))
         cmd_stdin = std::string((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
 
-    NixQueueCmd nix_queue_cmd(queue_cmd_class, cmd_id, cmd_subid, cmd_argv, {}, cmd_stdin);
+    NixQueueCmd nix_queue_cmd(cmd_class, cmd_class, cmd_id, cmd_subid, cmd_argv, {}, cmd_stdin);
 
     std::shared_ptr<PG::conn> null_conn(nullptr);
     nix_queue_cmd.meta.stamp_start_time();

@@ -17,8 +17,6 @@ class NixQueueCmd
 {
     Logger *logger = Logger::getInstance();
 
-    static const std::string UPDATE_STMT_WITHOUT_RELNAME;
-
     bool _is_valid = false;
 
     bool cmd_succeeded() const;
@@ -34,9 +32,13 @@ public:
     std::string cmd_stdout = "";
     std::string cmd_stderr = "";
 
-    NixQueueCmd(std::shared_ptr<PG::result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     NixQueueCmd(
-            const std::string &queue_cmd_class,
+            std::shared_ptr<PG::result> &result,
+            int row,
+            const std::unordered_map<std::string, int> &fieldMapping) noexcept;
+    NixQueueCmd(
+            const std::string &cmd_class_identity,
+            const std::string &cmd_class_relname,
             const std::string &cmd_id,
             const std::optional<std::string> &cmd_subid,
             const std::vector<std::string> &cmd_argv,

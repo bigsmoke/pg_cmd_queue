@@ -13,16 +13,16 @@ std::string SqlQueueCmd::select_stmt(
 {
     return std::string(R"SQL(
 SELECT
-    queue_cmd_class::text as queue_cmd_class
-    ,(parse_ident(queue_cmd_class::text))[
-        array_upper(parse_ident(queue_cmd_class::text), 1)
-    ] as queue_cmd_relname
+    (pg_identify_object('pg_class'::regclass, cmd_class, 0)).identity AS cmd_class_identity
+    ,(parse_ident(cmd_class::text))[
+        array_upper(parse_ident(cmd_class::text), 1)
+    ] AS cmd_class_relname
     ,cmd_id
     ,cmd_subid
     ,extract(epoch from cmd_queued_since) as cmd_queued_since
     ,cmd_sql
 FROM
-    cmdq.)SQL" + cmd_queue.queue_cmd_relname /* TODO: escape relname */ + R"SQL(
+    )SQL" + cmd_queue.cmd_class_identity /* (already quoted) */ + R"SQL(
 WHERE
     cmd_runtime IS NULL)SQL" + ( where ? R"SQL(
     AND )SQL" + where.value() : "") + R"SQL(
@@ -34,20 +34,6 @@ FOR UPDATE SKIP LOCKED
 )SQL");
 }
 
-const std::string SqlQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
-    UPDATE
-        cmdq.%s
-    SET
-        cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))
-        ,cmd_sql_result_status = $5
-        ,cmd_sql_result_rows = $6
-        ,cmd_sql_fatal_error = $7
-        ,cmd_sql_nonfatal_errors = $8
-    WHERE
-        cmd_id = $1
-        AND cmd_subid IS NOT DISTINCT from $2
-)SQL";
-
 /*
 std::string SqlQueueCmd::select::notify(const CmdQueue &cmd_queue)
 {
@@ -57,7 +43,21 @@ std::string SqlQueueCmd::select::notify(const CmdQueue &cmd_queue)
 
 std::string SqlQueueCmd::update_stmt(const CmdQueue &cmd_queue)
 {
-    return formatString(UPDATE_STMT_WITHOUT_RELNAME, cmd_queue.queue_cmd_relname.c_str());
+    return formatString(R"SQL(
+UPDATE
+    %s
+SET
+    cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))
+    ,cmd_sql_result_status = $5
+    ,cmd_sql_result_rows = $6
+    ,cmd_sql_fatal_error = $7
+    ,cmd_sql_nonfatal_errors = $8
+WHERE
+    cmd_id = $1
+    AND cmd_subid IS NOT DISTINCT from $2
+)SQL",
+            cmd_queue.cmd_class_identity.c_str()
+        );
 }
 
 std::vector<std::optional<std::string>> SqlQueueCmd::update_params()
@@ -70,8 +70,8 @@ std::vector<std::optional<std::string>> SqlQueueCmd::update_params()
     params.push_back(formatString("%f", meta.cmd_runtime_start));
     params.push_back(formatString("%f", meta.cmd_runtime_end));
     params.push_back(cmd_sql_result_status);
-    params.push_back(std::string("null"));  // TODO
-                                            //
+    params.push_back(std::string("null"));
+
     if (cmd_sql_fatal_error)
         params.push_back(
             PQ::as_text_composite_value(
@@ -93,7 +93,10 @@ std::vector<std::optional<std::string>> SqlQueueCmd::update_params()
     return params;
 }
 
-SqlQueueCmd::SqlQueueCmd(std::shared_ptr<PG::result> &result, int row, const std::unordered_map<std::string, int> &fieldMapping) noexcept
+SqlQueueCmd::SqlQueueCmd(
+        std::shared_ptr<PG::result> &result,
+        int row,
+        const std::unordered_map<std::string, int> &fieldMapping) noexcept
     : meta(result, row, fieldMapping)
 {
     static std::regex leading_and_trailing_whitespace("^[\n\t ]+|[\n\t ]+$");
@@ -104,9 +107,9 @@ SqlQueueCmd::SqlQueueCmd(std::shared_ptr<PG::result> &result, int row, const std
 
     try
     {
-        if (PQgetisnull(result->get(), row, fieldMapping.at("cmd_sql")))
+        if (PQ::getisnull(result, row, fieldMapping.at("cmd_sql")))
             throw std::domain_error("`cmd_sql` should never be `NULL`.");
-        this->cmd_sql = PQgetvalue(result->get(), row, fieldMapping.at("cmd_sql"));
+        this->cmd_sql = PQ::getvalue(result, row, fieldMapping.at("cmd_sql"));
         this->cmd_sql = std::regex_replace(this->cmd_sql, leading_and_trailing_whitespace, "");
     }
     catch (std::exception &ex)
@@ -118,7 +121,9 @@ SqlQueueCmd::SqlQueueCmd(std::shared_ptr<PG::result> &result, int row, const std
 
 void SqlQueueCmd::receive_notice_c_wrapper(void *arg, const PGresult *res)
 {
-    auto member_function = std::bind(&SqlQueueCmd::receive_notice, (SqlQueueCmd*)arg, std::placeholders::_1);
+    auto member_function = std::bind(&SqlQueueCmd::receive_notice,
+                                     (SqlQueueCmd*)arg,
+                                     std::placeholders::_1);
     member_function(res);
 }
 
@@ -146,7 +151,9 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
 {
     // TODO: Check connection viability
 
-    PQnoticeReceiver old_receiver = PQsetNoticeReceiver(conn->get(), SqlQueueCmd::receive_notice_c_wrapper, nullptr);
+    PQnoticeReceiver old_receiver = PQsetNoticeReceiver(conn->get(),
+                                                        SqlQueueCmd::receive_notice_c_wrapper,
+                                                        nullptr);
 
     logger->log(
         LOG_DEBUG3, "cmd_id = '%s'%s: %s",

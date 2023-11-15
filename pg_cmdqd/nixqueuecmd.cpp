@@ -33,10 +33,10 @@ std::string NixQueueCmd::select_stmt(
 {
     return std::string(R"SQL(
 SELECT
-    queue_cmd_class::text AS queue_cmd_class
-    ,(parse_ident(queue_cmd_class::text))[
-        array_upper(parse_ident(queue_cmd_class::text), 1)
-    ] AS queue_cmd_relname
+    (pg_identify_object('pg_class'::regclass, cmd_class, 0)).identity AS cmd_class_identity
+    ,(parse_ident(cmd_class::text))[
+        array_upper(parse_ident(cmd_class::text), 1)
+    ] AS cmd_class_relname
     ,cmd_id
     ,cmd_subid
     ,extract(epoch from cmd_queued_since) AS cmd_queued_since
@@ -44,7 +44,7 @@ SELECT
     ,cmd_env
     ,convert_from(cmd_stdin, 'UTF8') AS cmd_stdin
 FROM
-    cmdq.)SQL" + cmd_queue.queue_cmd_relname /* TODO: escape relname */ + R"SQL(
+    )SQL" + cmd_queue.cmd_class_identity /* (already quoted) */ + R"SQL(
 WHERE
     cmd_runtime IS NULL)SQL" + ( where ? R"SQL(
     AND )SQL" + where.value() : "") + R"SQL(
@@ -55,20 +55,6 @@ LIMIT 1
 FOR UPDATE SKIP LOCKED
 )SQL");
 }
-
-const std::string NixQueueCmd::UPDATE_STMT_WITHOUT_RELNAME = R"SQL(
-    UPDATE
-        cmdq.%s
-    SET
-        cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))
-        ,cmd_exit_code = $5
-        ,cmd_term_sig = $6
-        ,cmd_stdout = convert_to($7, 'UTF8')
-        ,cmd_stderr = convert_to($8, 'UTF8')
-    WHERE
-        cmd_id = $1
-        AND cmd_subid IS NOT DISTINCT from $2
-)SQL";
 
 /*
 std::string NixQueueCmd::select::notify(const CmdQueue &cmd_queue)
@@ -92,7 +78,7 @@ WHERE
     cmd_id = '%s'
     AND cmd_subid IS NOT DISTINCT from %s
 )SQL",
-            meta.queue_cmd_class.c_str(),
+            meta.cmd_class_identity.c_str(),
             meta.cmd_runtime_start,
             meta.cmd_runtime_end,
             cmd_exit_code ? std::to_string(cmd_exit_code.value()).c_str() : "NULL",
@@ -106,7 +92,21 @@ WHERE
 
 std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue)
 {
-    return formatString(UPDATE_STMT_WITHOUT_RELNAME, cmd_queue.queue_cmd_relname.c_str());
+    return formatString(R"SQL(
+UPDATE
+    cmdq.%s
+SET
+    cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))
+    ,cmd_exit_code = $5
+    ,cmd_term_sig = $6
+    ,cmd_stdout = convert_to($7, 'UTF8')
+    ,cmd_stderr = convert_to($8, 'UTF8')
+WHERE
+    cmd_id = $1
+    AND cmd_subid IS NOT DISTINCT from $2
+)SQL",
+            cmd_queue.cmd_class_relname.c_str()
+        );
 }
 
 std::vector<std::optional<std::string>> NixQueueCmd::update_params()
@@ -163,14 +163,15 @@ NixQueueCmd::NixQueueCmd(
 }
 
 NixQueueCmd::NixQueueCmd(
-        const std::string &queue_cmd_class,
+        const std::string &cmd_class_identity,
+        const std::string &cmd_class_relname,
         const std::string &cmd_id,
         const std::optional<std::string> &cmd_subid,
         const std::vector<std::string> &cmd_argv,
         const std::unordered_map<std::string, std::string> &cmd_env,
         const std::string &cmd_stdin
     )
-    : meta(queue_cmd_class, cmd_id, cmd_subid),
+    : meta(cmd_class_identity, cmd_class_relname, cmd_id, cmd_subid),
       cmd_argv(cmd_argv),
       cmd_env(cmd_env),
       cmd_stdin(cmd_stdin)
@@ -183,6 +184,7 @@ NixQueueCmd::~NixQueueCmd()
 
 std::string NixQueueCmd::cmd_line() const
 {
+    // TODO: Proper bash escaping
     static std::regex re("^.*[ \"$?!&%#,;].*$");
     std::string line;
 

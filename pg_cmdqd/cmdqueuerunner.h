@@ -22,8 +22,6 @@
 #include "sqlqueuecmd.h"
 #include "utils.h"
 
-// TODO: Use qualified queue names everywhere
-
 template <typename T>
 class CmdQueueRunner
 {
@@ -71,7 +69,7 @@ class CmdQueueRunner
             std::shared_ptr<PG::result> notify_listen_result = PQ::execParams(
                 conn,
                 "SELECT pg_notify(pg_cmd_queue_notify_channel(), row($1::text, $2::text, $3::text)::text)",
-                3, {}, {CmdQueue::CMD_QUEUE_RELNAME, _cmd_queue.queue_cmd_relname, "LISTEN"});
+                3, {}, {CmdQueue::CMD_QUEUE_RELNAME, _cmd_queue.cmd_class_identity, "LISTEN"});
             if (PQ::resultStatus(notify_listen_result) != PGRES_TUPLES_OK)
                 logger->log(LOG_ERROR, "Failed to `NOTIFY` listening status: %s",
                             PQ::resultErrorMessage(notify_listen_result).c_str());
@@ -118,7 +116,7 @@ class CmdQueueRunner
         std::shared_ptr<PG::result> result = PQ::execParams(
             conn,
             "SELECT pg_notify(pg_cmd_queue_notify_channel(), row($1::text, $2::text, $3::text)::text)",
-            3, {}, {CmdQueue::CMD_QUEUE_RELNAME, _cmd_queue.queue_cmd_relname, "PREPARE"});
+            3, {}, {CmdQueue::CMD_QUEUE_RELNAME, _cmd_queue.cmd_class_identity, "PREPARE"});
 
         if (PQ::resultStatus(result) != PGRES_TUPLES_OK)
         {
@@ -286,7 +284,7 @@ class CmdQueueRunner
                                     notify_payload_fields.size()));
                             if (not notify_payload_fields[0].has_value())
                                 throw std::runtime_error(
-                                    "The 1st field (`cmd_class_qualified`) in NOTIFY payload may not be `NULL`");
+                                    "The 1st field (`cmd_class_identity`) in NOTIFY payload may not be `NULL`");
                             if (not notify_payload_fields[1].has_value())
                                 throw std::runtime_error(
                                     "The 2nd field (`cmd_id`) in NOTIFY payload may not be `NULL`");
@@ -300,7 +298,7 @@ class CmdQueueRunner
                             continue; // Let's go check for another `NOTIFY` in the libpq queue.
                         }
 
-                        if (notify_payload_fields[0].value() == _cmd_queue.queue_cmd_class_qualified)
+                        if (notify_payload_fields[0].value() == _cmd_queue.cmd_class_identity)
                         {
                             logger->log(LOG_DEBUG1,
                                         "It appears as if this NOTIFY event on the `%s` channel is for me: %s",
@@ -403,7 +401,7 @@ public:
 
 #ifdef _GNU_SOURCE
         pthread_t native = thread.native_handle();
-        pthread_setname_np(native, cmd_queue.queue_cmd_relname.substr(0, 15).c_str());
+        pthread_setname_np(native, cmd_queue.cmd_class_relname.substr(0, 15).c_str());
 #endif
     }
 
@@ -427,7 +425,7 @@ public:
             logger->log(LOG_DEBUG5,
                         "Simulating `kill(%i)` signal to runner `%s` thread",
                         sig_num,
-                        _cmd_queue.queue_cmd_class_qualified.c_str());
+                        _cmd_queue.cmd_class_identity.c_str());
 
         // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
         // We stupidly write the binary representation of the `int`, knowing that the endianness at the other

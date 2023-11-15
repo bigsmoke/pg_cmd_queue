@@ -13,9 +13,9 @@ QueueCmdMetadata::QueueCmdMetadata(
 {
     try
     {
-        queue_cmd_class = PQ::getvalue(result, row_number, field_numbers.at("queue_cmd_class"));
+        cmd_class_identity = PQ::getvalue(result, row_number, field_numbers.at("cmd_class_identity"));
 
-        queue_cmd_relname = PQ::getvalue(result, row_number, field_numbers.at("queue_cmd_relname"));
+        cmd_class_relname = PQ::getvalue(result, row_number, field_numbers.at("cmd_class_relname"));
 
         cmd_id = PQ::getvalue(result, row_number, field_numbers.at("cmd_id"));
 
@@ -31,11 +31,13 @@ QueueCmdMetadata::QueueCmdMetadata(
 }
 
 QueueCmdMetadata::QueueCmdMetadata(
-        const std::string &queue_cmd_class,
+        const std::string &cmd_class_identity,
+        const std::string &cmd_class_relname,
         const std::string &cmd_id,
         const std::optional<std::string> &cmd_subid
     )
-    : queue_cmd_class(queue_cmd_class),
+    : cmd_class_identity(cmd_class_identity),
+      cmd_class_relname(cmd_class_relname),
       cmd_id(cmd_id),
       cmd_subid(cmd_subid)
 {

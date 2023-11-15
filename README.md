@@ -1,7 +1,7 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-10-26 12:00:52.311029+01
+pg_readme_generated_at: 2023-11-15 22:54:54.792367+00
 pg_readme_version: 0.6.4
 ---
 
@@ -16,7 +16,7 @@ that matches the signature of either:
 
 Each queue must be registered with the [`cmd_queue`](#table-cmd_queue) table.
 That tells the `pg_cmd_queue_runner` daemon where to look for each queue and
-how to connect.
+how to run each queue.
 
 `pg_cmd_queue` does _not_ come with any preconfigured queues.
 
@@ -56,7 +56,7 @@ which does not immediately need to support a high throughput, a view will
 often be the simplest.  See the [`test__pg_cmd_queue()`
 procedure](#procedure-test__pg_cmd_queue) for a full example.
 
-When creating your own `_queue_cmd` tables or views, you may add additional
+When creating your own `_cmd` tables or views, you may add additional
 columns of your own, _after_ the columns that are specified by the
 `_<cmd_type>_queue_cmd_template` that you choose to use.  Note that your custom
 column names are _not_ allowed to start with `queue_` or `cmd_`.
@@ -78,13 +78,19 @@ variables:
 
 * Helpers for setting up partitioning for table-based queues, to easily get rid
   of table bloat.
+* Allow per-queue configuration of effective user and group to run *nix commands
+  as?  Or should we “just” shelve off this functionality to `sudo` and the
+  likes?
+* `http_queue_cmd_template` support using `libcurl` would be f-ing awesome.
 * `pg_cron`'s `cron` schema compatibility, so that you can use `pg_cron` without
   using `pg_cron`. 😉
+* pgAgent schema compatibility, so that you can set up pgAgent jobs (in pgAdmin,
+  for example) without having to run pgAgent.
 
 ## Features that will _not_ be part of `pg_cmd_queue`
 
 * There will be no logging in `pg_cmd_queue`.  How to handle successes and
-  failures is up to triggers on the `queue_cmd_class` tables or views which
+  failures is up to triggers on the `cmd_class` tables or views which
   will be updated by the `pg_cmd_queue_runner` daemon after running a command.
 
 * There will be no support for SQL callbacks, not even in `sql_queue_cmd`
@@ -128,18 +134,18 @@ There are 5 tables that directly belong to the `pg_cmd_queue` extension.
 
 Every table or view which holds individual queue commands has to be registered as a record in this table.
 
-The `cmd_queue` table has 12 attributes:
+The `cmd_queue` table has 13 attributes:
 
-1. `cmd_queue.queue_cmd_class` `regclass`
-
-   - `NOT NULL`
-   - `CHECK ((parse_ident(queue_cmd_class::text))[array_upper(parse_ident(queue_cmd_class::text), 1)] ~ '^[a-z][a-z0-9_]+_cmd$'::text)`
-   - `PRIMARY KEY (queue_cmd_class)`
-
-2. `cmd_queue.queue_signature_class` `regclass`
+1. `cmd_queue.cmd_class` `regclass`
 
    - `NOT NULL`
-   - `CHECK ((parse_ident(queue_signature_class::text))[array_upper(parse_ident(queue_signature_class::text), 1)] = ANY (ARRAY['nix_queue_cmd_template'::text, 'sql_queue_cmd_template'::text]))`
+   - `CHECK ((parse_ident(cmd_class::text))[array_upper(parse_ident(cmd_class::text), 1)] ~ '^[a-z][a-z0-9_]+_cmd$'::text)`
+   - `PRIMARY KEY (cmd_class)`
+
+2. `cmd_queue.cmd_signature_class` `regclass`
+
+   - `NOT NULL`
+   - `CHECK ((parse_ident(cmd_signature_class::text))[array_upper(parse_ident(cmd_signature_class::text), 1)] = ANY (ARRAY['nix_queue_cmd_template'::text, 'sql_queue_cmd_template'::text]))`
 
 3. `cmd_queue.queue_runner_role` `name`
 
@@ -162,25 +168,30 @@ The `cmd_queue` table has 12 attributes:
 
 8. `cmd_queue.queue_cmd_timeout` `interval`
 
-9. `cmd_queue.queue_wait_time_limit_warn` `interval`
+9. `cmd_queue.queue_is_enabled` `boolean`
 
-10. `cmd_queue.queue_wait_time_limit_crit` `interval`
+   - `NOT NULL`
+   - `DEFAULT true`
 
-11. `cmd_queue.queue_created_at` `timestamp with time zone`
+10. `cmd_queue.queue_wait_time_limit_warn` `interval`
+
+11. `cmd_queue.queue_wait_time_limit_crit` `interval`
+
+12. `cmd_queue.queue_created_at` `timestamp with time zone`
 
    - `NOT NULL`
    - `DEFAULT now()`
 
-12. `cmd_queue.pg_extension_name` `text`
+13. `cmd_queue.pg_extension_name` `text`
 
 #### Table: `queue_cmd_template`
 
 The `queue_cmd_template` table has 5 attributes:
 
-1. `queue_cmd_template.queue_cmd_class` `regclass`
+1. `queue_cmd_template.cmd_class` `regclass`
 
    - `NOT NULL`
-   - `FOREIGN KEY (queue_cmd_class) REFERENCES cmd_queue(queue_cmd_class) ON UPDATE CASCADE ON DELETE CASCADE`
+   - `FOREIGN KEY (cmd_class) REFERENCES cmd_queue(cmd_class) ON UPDATE CASCADE ON DELETE CASCADE`
 
 2. `queue_cmd_template.cmd_id` `text`
 
@@ -188,9 +199,9 @@ The `queue_cmd_template` table has 5 attributes:
 
    When a single key in the underlying object of a queue command is sufficient to
    identify it, a `::text` representation of the key should go into this column.
-   If multiple keys are needed, for example, when the underlying object has a
+   If multiple keys are needed—for example, when the underlying object has a
    multi-column primary key or when each underlying object can simultaneously
-   appear in multiple commands the queue, you will want to use `cmd_subid` in
+   appear in multiple commands the queue—you will want to use `cmd_subid` in
    addition to `cmd_id`.
 
    - `NOT NULL`
@@ -210,7 +221,7 @@ The `queue_cmd_template` table has 5 attributes:
 
 The `nix_queue_cmd_template` table has 12 attributes:
 
-1. `nix_queue_cmd_template.queue_cmd_class` `regclass`
+1. `nix_queue_cmd_template.cmd_class` `regclass`
 
    - `NOT NULL`
 
@@ -220,9 +231,9 @@ The `nix_queue_cmd_template` table has 12 attributes:
 
    When a single key in the underlying object of a queue command is sufficient to
    identify it, a `::text` representation of the key should go into this column.
-   If multiple keys are needed, for example, when the underlying object has a
+   If multiple keys are needed—for example, when the underlying object has a
    multi-column primary key or when each underlying object can simultaneously
-   appear in multiple commands the queue, you will want to use `cmd_subid` in
+   appear in multiple commands the queue—you will want to use `cmd_subid` in
    addition to `cmd_id`.
 
    - `NOT NULL`
@@ -246,8 +257,12 @@ The `nix_queue_cmd_template` table has 12 attributes:
 7. `nix_queue_cmd_template.cmd_env` `hstore`
 
    - `NOT NULL`
+   - `DEFAULT ''::hstore`
 
 8. `nix_queue_cmd_template.cmd_stdin` `bytea`
+
+   - `NOT NULL`
+   - `DEFAULT '\x'::bytea`
 
 9. `nix_queue_cmd_template.cmd_exit_code` `integer`
 
@@ -272,7 +287,7 @@ The `nix_queue_cmd_template` table has 12 attributes:
 
 The `sql_queue_cmd_template` table has 10 attributes:
 
-1. `sql_queue_cmd_template.queue_cmd_class` `regclass`
+1. `sql_queue_cmd_template.cmd_class` `regclass`
 
    - `NOT NULL`
 
@@ -282,9 +297,9 @@ The `sql_queue_cmd_template` table has 10 attributes:
 
    When a single key in the underlying object of a queue command is sufficient to
    identify it, a `::text` representation of the key should go into this column.
-   If multiple keys are needed, for example, when the underlying object has a
+   If multiple keys are needed—for example, when the underlying object has a
    multi-column primary key or when each underlying object can simultaneously
-   appear in multiple commands the queue, you will want to use `cmd_subid` in
+   appear in multiple commands the queue—you will want to use `cmd_subid` in
    addition to `cmd_id`.
 
    - `NOT NULL`
@@ -321,7 +336,7 @@ The `sql_queue_cmd_template` table has 10 attributes:
 
 The `http_queue_cmd_template` table has 12 attributes:
 
-1. `http_queue_cmd_template.queue_cmd_class` `regclass`
+1. `http_queue_cmd_template.cmd_class` `regclass`
 
    - `NOT NULL`
 
@@ -363,6 +378,32 @@ Procedure arguments:
 |   `$2` |       `IN` | `expect$`                                                         | `nix_queue_cmd_template`                                             |  |
 |   `$3` |       `IN` | `cmdqd_timeout$`                                                  | `interval`                                                           | `'00:00:10'::interval` |
 
+#### Function: `cmd_class_color (regclass)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | ``                                                                | `regclass`                                                           |  |
+|   `$2` |    `TABLE` | `r`                                                               | `integer`                                                            |  |
+|   `$3` |    `TABLE` | `g`                                                               | `integer`                                                            |  |
+|   `$4` |    `TABLE` | `b`                                                               | `integer`                                                            |  |
+|   `$5` |    `TABLE` | `hex`                                                             | `text`                                                               |  |
+|   `$6` |    `TABLE` | `ansi_fg`                                                         | `text`                                                               |  |
+|   `$7` |    `TABLE` | `ansi_bg`                                                         | `text`                                                               |  |
+
+Function return type: `TABLE(r integer, g integer, b integer, hex text, ansi_fg text, ansi_bg text)`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`, ROWS 1000
+
+#### Function: `cmd_queue__create_queue_signature_downcast()`
+
+Function return type: `trigger`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+
 #### Function: `cmd_queue__notify_daemon_of_changes()`
 
 Function return type: `trigger`
@@ -379,13 +420,30 @@ Function-local settings:
 
   *  `SET search_path TO cmdq, public, pg_temp`
 
-#### Function: `nix_queue_cmd (anynonarray)`
+#### Function: `nix_queue_cmd_line (nix_queue_cmd_template, boolean)`
 
 Function arguments:
 
 | Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
-|   `$1` |       `IN` |                                                                   | `anynonarray`                                                        |  |
+|   `$1` |       `IN` |                                                                   | `nix_queue_cmd_template`                                             |  |
+|   `$2` |       `IN` |                                                                   | `boolean`                                                            | `false` |
+
+Function return type: `text`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+
+#### Function: `nix_queue_cmd_template (record)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `record`                                                             |  |
 
 Function return type: `nix_queue_cmd_template`
 
@@ -444,24 +502,6 @@ the context of `CREATE EXTENSION`, for example:
 Function return type: `text`
 
 Function attributes: `STABLE`, `LEAKPROOF`, `PARALLEL SAFE`
-
-#### Function: `queue_cmd_class_color (regclass)`
-
-Function arguments:
-
-| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
-| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
-|   `$1` |       `IN` | ``                                                                | `regclass`                                                           |  |
-|   `$2` |    `TABLE` | `r`                                                               | `integer`                                                            |  |
-|   `$3` |    `TABLE` | `g`                                                               | `integer`                                                            |  |
-|   `$4` |    `TABLE` | `b`                                                               | `integer`                                                            |  |
-|   `$5` |    `TABLE` | `hex`                                                             | `text`                                                               |  |
-|   `$6` |    `TABLE` | `ansi_fg`                                                         | `text`                                                               |  |
-|   `$7` |    `TABLE` | `ansi_bg`                                                         | `text`                                                               |  |
-
-Function return type: `TABLE(r integer, g integer, b integer, hex text, ansi_fg text, ansi_bg text)`
-
-Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`, ROWS 1000
 
 #### Function: `queue_cmd__delete_after_update()`
 
@@ -560,7 +600,7 @@ Procedure arguments:
 
 | Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
-|   `$1` |       `IN` | `queue_cmd_class$`                                                | `regclass`                                                           |  |
+|   `$1` |       `IN` | `cmd_class$`                                                      | `regclass`                                                           |  |
 |   `$2` |       `IN` | `max_iterations$`                                                 | `bigint`                                                             | `NULL::bigint` |
 |   `$3` |       `IN` | `iterate_until_empty$`                                            | `boolean`                                                            | `true` |
 |   `$4` |       `IN` | `queue_reselect_interval$`                                        | `interval`                                                           | `NULL::interval` |
@@ -702,8 +742,8 @@ begin
             execute function cmdq.wobbie_user_confirmation_mail_cmd__instead_of_update();
 
         insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
+            cmd_class
+            ,cmd_signature_class
             ,queue_reselect_interval
             ,queue_wait_time_limit_warn
             ,queue_wait_time_limit_crit
@@ -730,6 +770,109 @@ Procedure arguments:
 | Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
 |   `$1` |       `IN` | `test_stage$`                                                     | `text`                                                               |  |
+
+#### Procedure: `test__nix_queue_cmd_line()`
+
+Procedure-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET plpgsql.check_asserts TO true`
+
+```sql
+CREATE OR REPLACE PROCEDURE cmdq.test__nix_queue_cmd_line()
+ LANGUAGE plpgsql
+ SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET "plpgsql.check_asserts" TO 'true'
+AS $procedure$
+declare
+    _cmd record;
+begin
+    create temporary table tst_nix_cmd (
+        like nix_queue_cmd_template including all
+        ,cmd_line_expected text
+            not null
+    ) on commit drop;
+    alter table tst_nix_cmd
+        alter column cmd_class
+            set default to_regclass('tst_nix_cmd');
+    insert into cmd_queue
+        (cmd_class, cmd_signature_class)
+    values
+        ('tst_nix_cmd', 'nix_queue_cmd_template')
+    ;
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test1'
+            ,array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted'' text']
+            ,'VAR1=>"value 1", VAR_TWO=>val2'::hstore
+            ,E'Multiline\ntext\n'
+            ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with '\''single-quoted'\'' text'$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd, false) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test2'
+            ,array['cmd2', '--opt']
+            ,''::hstore
+            ,E'Just one line\n'
+            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 -- cmd2 --opt$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test2'
+            ,'subid'
+            ,array['cmd2', '--opt']
+            ,''::hstore
+            ,E'Just one line\n'
+            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 subid -- cmd2 --opt$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+end;
+$procedure$
+```
 
 #### Procedure: `test__pg_cmd_queue()`
 
@@ -820,8 +963,8 @@ begin
     <<incompatible_view_signature>>
     begin
         insert into cmd_queue (
-            queue_cmd_class
-            ,queue_signature_class
+            cmd_class
+            ,cmd_signature_class
             ,queue_reselect_interval
             ,queue_wait_time_limit_warn
             ,queue_wait_time_limit_crit
@@ -956,8 +1099,8 @@ begin
         execute function cmdq.wobbie_user_password_reset_mail_cmd__instead_of_update();
 
     insert into cmd_queue (
-        queue_cmd_class
-        ,queue_signature_class
+        cmd_class
+        ,cmd_signature_class
         ,queue_reselect_interval
         ,queue_wait_time_limit_warn
         ,queue_wait_time_limit_crit

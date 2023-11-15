@@ -32,7 +32,7 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << "Options:" << std::endl
         << "    \x1b[1m--log-level <log_level>\x1b[22m" << std::endl
         << "    \x1b[1m--log-times\x1b[22m | \x1b[1m--no-log-times\x1b[22m      Include the time in log messages (the default), or not." << std::endl
-        << "    \x1b[1m--cmd-queue <queue_cmd_class>\x1b[22m     Can be repeated for every queue you want to run." << std::endl
+        << "    \x1b[1m--cmd-queue <cmd_class>\x1b[22m           Can be repeated for every queue you want to run." << std::endl
         << "    \x1b[1m--emit-sigusr1-when-ready\x1b[22m" << std::endl
         << std::endl
         << "\x1b[1m<connection_string>\x1b[22m" << std::endl
@@ -95,7 +95,7 @@ int main(int argc, char **argv)
     Logger *logger = Logger::getInstance();
     logger->setLogLevel(LOG_INFO);
 
-    std::vector<std::string> explicit_queue_cmd_classes;
+    std::vector<std::string> explicit_cmd_classes;
 
     std::string conn_str;
     bool emit_sigusr1_when_ready = false;
@@ -152,8 +152,8 @@ int main(int argc, char **argv)
             else if (std::string(argv[i]) == "--cmd-queue")
             {
                 if (i == argc-1)
-                    throw CmdLineParseError("Missing \x1b[1m<queue_cmd_class>\x1b[22m argument to \x1b[1m--cmd-queue\x1b[22m option.");
-                explicit_queue_cmd_classes.emplace_back(argv[++i]);
+                    throw CmdLineParseError("Missing \x1b[1m<cmd_class>\x1b[22m argument to \x1b[1m--cmd-queue\x1b[22m option.");
+                explicit_cmd_classes.emplace_back(argv[++i]);
             }
             else if (std::string(argv[i]) == "--emit-sigusr1-when-ready")
             {
@@ -186,13 +186,16 @@ int main(int argc, char **argv)
     setenv("PGAPPNAME", basename(argv[0]), 1);
 
     CmdQueueRunnerManager *manager = CmdQueueRunnerManager::make_instance(
-            conn_str, emit_sigusr1_when_ready, explicit_queue_cmd_classes);
+            conn_str, emit_sigusr1_when_ready, explicit_cmd_classes);
 
     manager->install_signal_handlers();
 
     manager->maintain_connection();
 
-    manager->refresh_queue_list();
+    // The first time we try to refresh the queue list, we want to return straight after failure,
+    // because there are scenarios (like during testing) when we rather just wait for a `NOTIFY`
+    // event telling us that the `cmd_queue` table now _is_ ready for `SELECT`.
+    manager->refresh_queue_list(false);
 
     manager->listen_for_queue_list_changes();
 

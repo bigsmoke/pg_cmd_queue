@@ -437,7 +437,7 @@ public:
                                                 &sig_num + kill_pipe_ptr_offset,
                                                 kill_pipe_bytes_to_write)
                ) > 0
-               or (kill_pipe_bytes_written < 0 and errno == SIGINT))
+               or (kill_pipe_bytes_written < 0 and errno == EINTR))
         {
             kill_pipe_bytes_to_write -= kill_pipe_bytes_written;
             kill_pipe_ptr_offset += kill_pipe_bytes_written;

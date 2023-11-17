@@ -469,6 +469,8 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                 if (write_to_stdin_erred) break;
                 if (cum_stdin_bytes_written == (ssize_t)cmd_stdin.length())
                 {
+                    stdin_fds.close_write_fd();
+                    fds[0].fd = -1;
                     fds[0].events = 0;
                 }
             }

@@ -20,6 +20,59 @@ how to run each queue.
 
 `pg_cmd_queue` does _not_ come with any preconfigured queues.
 
+## Design philosophy and architecture
+
+`pg_cmd_queue` tries very hard to _not_ impose any additional semantics on top
+of those already provided by SQL on the one hand, and the POSIX command-line
+interface, HTTP, or indeed SQL again on the other end.
+
+The architecture is a bit deviant, but not overly complicated:
+
+1.  The daemon (`pg_cmdqd`) spawns a command queue runner thread with its own
+    Postgres connection for every queue registered in the `cmd_queue` table, for
+    which `cmd_queue.queue_is_enabled`.
+2.  Command queue runners `SELECT … FOR UPDATE` a single record from the
+    relationship identified by the `cmd_queue.cmd_class` primary key column.
+    *  By default, the oldest record (according to `rel.cmd_queued_since`) is
+       `SELECT`ed each time.
+    *  Once `SELECT … FOR UPDATE` no longer yields a row, the (re)select round
+       is considered complete and the reselect counter is incremented.
+    *  If `cmd_queue.queue_reselect_randomized_every_nth is not null` and the
+       reselect counter is divisable by this value, than the order of processing
+       is randomized for that reselect round.
+2.  The command described in the tuple returned by the `SELECT` statement is
+    run.  _How_ the command is run, depends on the `cmd_signature_class`:
+    a.  If the _command queue_ table or view is derived from the
+        `nix_queue_cmd_template`, then the \*nix command described by the
+        `cmd_argv`, `cmd_env` and `cmd_stdin` is executed using the POSIX
+        interface.  The `cmd_stdout`, `cmd_stderr` and `cmd_exit_code` or
+        `cmd_term_sig` of the command are captured.
+    b.  If the _command queue_ relationship is derived from the
+        `sql_queue_cmd_template`, then the command specification is much
+        simpler; it's just a `sql_cmd`.  The results of running this `sql_cmd`
+        are collected into `cmd_sql_result_status`, `cmd_sql_fatal_error`,
+        `cmd_sql_nonfatal_errors` and `cmd_sql_result_rows`.
+3.  Still within the same transaction, an `UPDATE` is performed on the record
+    (whether from a table or a view) identified by what should be a unique
+    `cmd_id`/`cmd_subid` combination.
+    *  `cmd_subid` may be `NULL` as it is matched using `IS NOT DISTINCT FROM`.
+    *  The `UPDATE` always communicates back the `cmd_runtime` to the queue.
+    *  In addition, in the case of a `nix_queue_cmd`, the `UPDATE` sets the
+       `cmd_exit_code`, `cmd_term_sig`, `cmd_stdout` and `cmd_stderr`.
+    *  Whereas, in the case of a `sql_queue_cmd`, the `UPDATE` sets
+       `cmd_sql_result_status`, `cmd_sql_fatal_error`,
+       `cmd_sql_nonfatal_errors` and `cmd_sql_result_rows`.
+
+It is the responsibility of the developer using `pg_cmd_queue` to:
+
+1.  make sure that commands appear and disappear from the queue when necessary;
+2.  log errors outside of the queue;
+3.  etc.
+
+This is all considered application-specific logic, about which `pg_cmd_queue`
+has no opinion, though it does offer some helpful, readymade trigger functions
+and the likes.
+
 ## Installing `pg_cmd_queue`
 
 The `pg_cmd_queue` `Makefile` uses PostgreSQL's build infrastructure for
@@ -60,6 +113,65 @@ When creating your own `_cmd` tables or views, you may add additional
 columns of your own, _after_ the columns that are specified by the
 `_<cmd_type>_queue_cmd_template` that you choose to use.  Note that your custom
 column names are _not_ allowed to start with `queue_` or `cmd_`.
+
+### View-based command queues
+
+The nice thing about a view-based queue is that it will always be up-to-date,
+as long as the predicates the view definition are correct.
+
+### Table-based command queues
+
+To create a table-based queue is simple:
+
+```sql
+create table cmdq.my_cmd (
+    like cmdq.nix_queue_cmd_template including all
+);
+```
+
+Or:
+
+```sql
+create table cmdq.my_cmd (
+    like cmdq.sql_queue_cmd_template including all
+);
+```
+
+To fill it automatically, however, you will need some triggers elsewhere.
+
+To not keep commands stuck in the queue table forever, at some point, you are
+going to have to delete them.  For that, there's a readymade trigger function.
+Hook it on like this:
+
+```sql
+create trigger delete_after_update
+    after update
+    on cmdq.my_cmd
+    for each row
+    execute cmdq.queue_cmd__delete_after_update();
+```
+
+However, without an accompanying `BEFORE` trigger that has a bit of error
+checking, commands would be deleted from the queue indiscriminately, regardless
+of whether they succeeded or failed.  This fits wholly within the design
+philosopy of `pg_cmd_queue`, because whether you actually consider a
+`cmd_exit_code = 12` a failure is up to you and your application logic, and
+the same goes for `cmd_sql_result_status = 'PGRES_FATAL_ERROR'`.  It's all up
+to you.  A `nix_queue_cmd__require_exit_success()` trigger function _is_
+provided for you for free, as is a `sql_queue_cmd__require_status_ok()`
+function.
+
+### Security considerations
+
+Be mindful of the fact that anybody with the ability to register queues in the
+[`cmd_queue`](#table-cmd_queue) table or who can make indidivual commands appear
+in one of the registered queues, will have their \*nix privileges escalated to:
+
+* _at least_ the level of the user and group the the `pg_cmdqd` runs at, in the
+  case of a queue matching the `nix_queue_cmd_template` signature; and/or
+* the level of privileges granted to the `queue_runner_role`, both in the case
+  of `sql_queue_cmd_template`-type command queues and during `UPDATE`s performed
+  on any command queue relationship.
 
 ## Running `pg_cmdqd` / `pg_command_queue_daemon`
 
@@ -386,7 +498,10 @@ create table cmd_queue (
         default true
     ,queue_wait_time_limit_warn interval
     ,queue_wait_time_limit_crit interval
-    ,queue_created_at timestamptz
+    ,queue_registered_at timestamptz
+        not null
+        default now()
+    ,queue_metadata_updated_at timestamptz
         not null
         default now()
     ,pg_extension_name text
@@ -407,6 +522,32 @@ $md$This is the role as which the queue runner should select from the queue and 
 $md$;
 
 select pg_catalog.pg_extension_config_dump('cmd_queue', 'WHERE pg_extension_name IS NULL');
+
+--------------------------------------------------------------------------------------------------------------
+
+create function cmd_queue__update_updated_at()
+    returns trigger
+    set search_path from current
+    language plpgsql
+    as $$
+begin
+    assert tg_when = 'BEFORE';
+    assert tg_op = 'UPDATE';
+    assert tg_level = 'ROW';
+    assert tg_table_schema = 'cmdq';
+    assert tg_table_name = 'cmd_queue';
+
+    NEW.queue_metadata_updated_at = now();
+
+    return NEW;
+end;
+$$;
+
+create trigger update_updated_at
+    before update
+    on cmd_queue
+    for each row
+    execute function cmd_queue__update_updated_at();
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -949,6 +1090,33 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
+create function nix_queue_cmd__require_exit_success()
+    returns trigger
+    language plpgsql
+    as $$
+begin
+    assert tg_when in ('BEFORE', 'AFTER');
+    assert tg_op = 'UPDATE';
+    assert tg_level = 'ROW';
+
+    -- TODO
+
+    if tg_when = 'BEFORE' then
+        return NEW;
+    end if;
+    return null;
+end;
+$$;
+
+comment on function nix_queue_cmd__require_exit_success() is
+$md$This trigger function will make a ruckus when a command finished with a non-zero exit code or with a termination signal.
+
+`_exit_success()` refers to the `EXIT_SUCCESS` macro defined as an alias for
+`0` in `stdlib.h`.
+$md$;
+
+--------------------------------------------------------------------------------------------------------------
+
 create function queue_cmd__delete_after_update()
     returns trigger
     language plpgsql
@@ -1329,6 +1497,26 @@ create trigger no_insert
     on sql_queue_cmd_template
     for each row
     execute function queue_cmd_template__no_insert();
+
+--------------------------------------------------------------------------------------------------------------
+
+create function sql_queue_cmd__require_status_ok()
+    returns trigger
+    language plpgsql
+    as $$
+begin
+    assert tg_when in ('BEFORE', 'AFTER');
+    assert tg_op = 'UPDATE';
+    assert tg_level = 'ROW';
+
+    -- TODO: Implement check
+
+    if tg_when = 'BEFORE' then
+        return NEW;
+    end if;
+    return null;
+end;
+$$;
 
 --------------------------------------------------------------------------------------------------------------
 

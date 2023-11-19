@@ -1099,7 +1099,38 @@ begin
     assert tg_op = 'UPDATE';
     assert tg_level = 'ROW';
 
-    -- TODO
+    if NEW.cmd_exit_code > 0 then
+        raise exception using
+            errcode = 'PE' || right('000' || NEW.cmd_exit_code::text,  3)
+            ,message = format(
+                E'Cought non-zero exit code %s for cmd_id = %L in %s.'
+                ,NEW.cmd_exit_code
+                ,OLD.cmd_id
+                ,OLD.cmd_class
+            )
+            ,detail = (
+                E'cmd_argv: ' || array_to_string(NEW.cmd_argv, ' ')
+                || coalesce(E'\ncmd_stderr: ' || convert_from(nullif(NEW.cmd_stderr, ''::bytea), 'UTF-8'),  '')
+                || coalesce(E'\ncmd_stdout: ' || convert_from(nullif(NEW.cmd_stdout, ''::bytea), 'UTF-8'),  '')
+            )
+        ;
+    end if;
+
+    if NEW.cmd_term_sig is not null then
+        raise exception using
+            errcode = 'PS' || right('000' || NEW.cmd_term_sig::text,  3)
+            ,message = format(
+                E'Cought termination signal %s for cmd_id = %L in %s.\nstderror: %s\nstdout: %s'
+                ,NEW.cmd_term_sig
+                ,OLD.cmd_id
+                ,OLD.cmd_class
+                ,convert_from(NEW.cmd_stderr, 'UTF8')
+                ,convert_from(NEW.cmd_stdout, 'UTF8')
+            )
+            ,detail = format(
+            )
+        ;
+    end if;
 
     if tg_when = 'BEFORE' then
         return NEW;

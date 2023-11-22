@@ -1286,18 +1286,20 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create function nix_queue_cmd_line(nix_queue_cmd_template, bool default false)
+create function cmd_line(
+        cmd_argv$ text[]
+        ,cmd_env$ hstore = ''::hstore
+        ,cmd_stdin$ bytea = ''
+    )
     returns text
     immutable
     leakproof
     parallel safe
-    set search_path from current
-    language plpgsql
-    as $$
-begin
+    language sql
     return (
         coalesce(
-            'echo ' || translate(encode(($1).cmd_stdin, 'base64'), E'\n', '') || ' | base64 -d | '
+            'echo ' || translate(encode(nullif(cmd_stdin$, ''::bytea), 'base64'), E'\n', '')
+                    || ' | base64 -d | '
             ,''
         )
         || coalesce(
@@ -1313,7 +1315,7 @@ begin
                         ,' '
                     )
                 from
-                   each(($1).cmd_env) as env_var(var_name, var_value)
+                   each(cmd_env$) as env_var(var_name, var_value)
             ) || ' '
             ,''
         )
@@ -1329,30 +1331,40 @@ begin
                     ,' '
                 )
             from
-                unnest(
-                    case
-                        when $2 then
-                            array[
-                                'pg_nix_queue_cmd'
-                                ,'--output-update'
-                                ,(pg_identify_object('pg_class'::regclass, ($1).cmd_class, 0)).identity
-                                ,($1).cmd_id
-                                ,($1).cmd_subid
-                                ,'--'
-                            ]
-                        else
-                            array[]::text[]
-                    end
-                    || ($1).cmd_argv
-                ) as arg
+                unnest(cmd_argv$) as arg
         )
     );
-end;
-$$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create procedure test__nix_queue_cmd_line()
+create function cmd_line(nix_queue_cmd_template, bool default false)
+    returns text
+    immutable
+    leakproof
+    parallel safe
+    set search_path from current
+    language sql
+    return cmd_line(
+        case
+            when $2 then
+                array[
+                    'pg_nix_queue_cmd'
+                    ,'--output-update'
+                    ,(pg_identify_object('pg_class'::regclass, ($1).cmd_class, 0)).identity
+                    ,($1).cmd_id
+                    ,($1).cmd_subid
+                    ,'--'
+                ]
+            else
+                array[]::text[]
+        end || ($1).cmd_argv
+        ,($1).cmd_env
+        ,($1).cmd_stdin
+    );
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure test__cmd_line()
     set search_path from current
     set plpgsql.check_asserts to true
     language plpgsql
@@ -1388,7 +1400,7 @@ begin
     )
     select
         inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd, false) as cmd_line_actual
+        ,cmd_line(inserted::tst_nix_cmd, false) as cmd_line_actual
     from
         inserted
     into
@@ -1411,7 +1423,7 @@ begin
     )
     select
         inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+        ,cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
     from
         inserted
     into
@@ -1435,7 +1447,7 @@ begin
     )
     select
         inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+        ,cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
     from
         inserted
     into

@@ -1092,6 +1092,7 @@ $$;
 
 create function nix_queue_cmd__require_exit_success()
     returns trigger
+    set search_path from current
     language plpgsql
     as $$
 begin
@@ -1103,16 +1104,19 @@ begin
         raise exception using
             errcode = 'PE' || right('000' || NEW.cmd_exit_code::text,  3)
             ,message = format(
-                E'Cought non-zero exit code %s for cmd_id = %L in %s.'
+                E'Cought non-zero exit code %s for `cmd_id = %L` in `%s` queue.'
                 ,NEW.cmd_exit_code
                 ,OLD.cmd_id
                 ,OLD.cmd_class
             )
             ,detail = (
-                E'cmd_argv: ' || array_to_string(NEW.cmd_argv, ' ')
+                'cmd_line: ' || cmd_line(NEW.cmd_argv, NEW.cmd_env)
                 || coalesce(E'\ncmd_stderr: ' || convert_from(nullif(NEW.cmd_stderr, ''::bytea), 'UTF-8'),  '')
                 || coalesce(E'\ncmd_stdout: ' || convert_from(nullif(NEW.cmd_stdout, ''::bytea), 'UTF-8'),  '')
             )
+            ,schema = tg_table_schema
+            ,table = tg_table_name
+            ,column = 'cmd_exit_code'
         ;
     end if;
 
@@ -1120,15 +1124,19 @@ begin
         raise exception using
             errcode = 'PS' || right('000' || NEW.cmd_term_sig::text,  3)
             ,message = format(
-                E'Cought termination signal %s for cmd_id = %L in %s.\nstderror: %s\nstdout: %s'
+                E'Cought termination signal %s for `cmd_id = %L` in `%s` queue.'
                 ,NEW.cmd_term_sig
                 ,OLD.cmd_id
                 ,OLD.cmd_class
-                ,convert_from(NEW.cmd_stderr, 'UTF8')
-                ,convert_from(NEW.cmd_stdout, 'UTF8')
             )
             ,detail = format(
+                'cmd_line: ' || cmd_line(NEW.cmd_argv, NEW.cmd_env)
+                || coalesce(E'\ncmd_stderr: ' || convert_from(nullif(NEW.cmd_stderr, ''::bytea), 'UTF-8'),  '')
+                || coalesce(E'\ncmd_stdout: ' || convert_from(nullif(NEW.cmd_stdout, ''::bytea), 'UTF-8'),  '')
             )
+            ,schema = tg_table_schema
+            ,table = tg_table_name
+            ,column = 'cmd_term_sig'
         ;
     end if;
 

@@ -1,7 +1,7 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-11-17 23:25:24.002205+00
+pg_readme_generated_at: 2023-11-28 15:46:18.351053+00
 pg_readme_version: 0.6.4
 ---
 
@@ -513,6 +513,37 @@ Function return type: `TABLE(r integer, g integer, b integer, hex text, ansi_fg 
 
 Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`, ROWS 1000
 
+#### Function: `cmd_line (nix_queue_cmd_template, boolean)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `nix_queue_cmd_template`                                             |  |
+|   `$2` |       `IN` |                                                                   | `boolean`                                                            | `false` |
+
+Function return type: `text`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+
+#### Function: `cmd_line (text[], hstore, bytea)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `cmd_argv$`                                                       | `text[]`                                                             |  |
+|   `$2` |       `IN` | `cmd_env$`                                                        | `hstore`                                                             | `''::hstore` |
+|   `$3` |       `IN` | `cmd_stdin$`                                                      | `bytea`                                                              | `'\x'::bytea` |
+
+Function return type: `text`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
 #### Function: `cmd_queue__create_queue_signature_downcast()`
 
 Function return type: `trigger`
@@ -545,23 +576,6 @@ Function-local settings:
 
   *  `SET search_path TO cmdq, public, pg_temp`
 
-#### Function: `nix_queue_cmd_line (nix_queue_cmd_template, boolean)`
-
-Function arguments:
-
-| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
-| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
-|   `$1` |       `IN` |                                                                   | `nix_queue_cmd_template`                                             |  |
-|   `$2` |       `IN` |                                                                   | `boolean`                                                            | `false` |
-
-Function return type: `text`
-
-Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
-
-Function-local settings:
-
-  *  `SET search_path TO cmdq, public, pg_temp`
-
 #### Function: `nix_queue_cmd__require_exit_success()`
 
 This trigger function will make a ruckus when a command finished with a non-zero exit code or with a termination signal.
@@ -570,6 +584,10 @@ This trigger function will make a ruckus when a command finished with a non-zero
 `0` in `stdlib.h`.
 
 Function return type: `trigger`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
 
 #### Function: `nix_queue_cmd_template (record)`
 
@@ -749,6 +767,109 @@ Procedure-local settings:
 
 Function return type: `trigger`
 
+#### Procedure: `test__cmd_line()`
+
+Procedure-local settings:
+
+  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET plpgsql.check_asserts TO true`
+
+```sql
+CREATE OR REPLACE PROCEDURE cmdq.test__cmd_line()
+ LANGUAGE plpgsql
+ SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET "plpgsql.check_asserts" TO 'true'
+AS $procedure$
+declare
+    _cmd record;
+begin
+    create temporary table tst_nix_cmd (
+        like nix_queue_cmd_template including all
+        ,cmd_line_expected text
+            not null
+    ) on commit drop;
+    alter table tst_nix_cmd
+        alter column cmd_class
+            set default to_regclass('tst_nix_cmd');
+    insert into cmd_queue
+        (cmd_class, cmd_signature_class)
+    values
+        ('tst_nix_cmd', 'nix_queue_cmd_template')
+    ;
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test1'
+            ,array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted'' text']
+            ,'VAR1=>"value 1", VAR_TWO=>val2'::hstore
+            ,E'Multiline\ntext\n'
+            ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with '\''single-quoted'\'' text'$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,cmd_line(inserted::tst_nix_cmd, false) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test2'
+            ,array['cmd2', '--opt']
+            ,''::hstore
+            ,E'Just one line\n'
+            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 -- cmd2 --opt$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+
+    with inserted as (
+        insert into tst_nix_cmd (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
+        values (
+            'test2'
+            ,'subid'
+            ,array['cmd2', '--opt']
+            ,''::hstore
+            ,E'Just one line\n'
+            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 subid -- cmd2 --opt$str$
+        )
+        returning
+            *
+    )
+    select
+        inserted.*
+        ,cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
+    from
+        inserted
+    into
+        _cmd
+    ;
+    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
+        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
+end;
+$procedure$
+```
+
 #### Procedure: `test_dump_restore__pg_cmd_queue (text)`
 
 Procedure arguments:
@@ -908,109 +1029,6 @@ Procedure arguments:
 | Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
 |   `$1` |       `IN` | `test_stage$`                                                     | `text`                                                               |  |
-
-#### Procedure: `test__nix_queue_cmd_line()`
-
-Procedure-local settings:
-
-  *  `SET search_path TO cmdq, public, pg_temp`
-  *  `SET plpgsql.check_asserts TO true`
-
-```sql
-CREATE OR REPLACE PROCEDURE cmdq.test__nix_queue_cmd_line()
- LANGUAGE plpgsql
- SET search_path TO 'cmdq', 'public', 'pg_temp'
- SET "plpgsql.check_asserts" TO 'true'
-AS $procedure$
-declare
-    _cmd record;
-begin
-    create temporary table tst_nix_cmd (
-        like nix_queue_cmd_template including all
-        ,cmd_line_expected text
-            not null
-    ) on commit drop;
-    alter table tst_nix_cmd
-        alter column cmd_class
-            set default to_regclass('tst_nix_cmd');
-    insert into cmd_queue
-        (cmd_class, cmd_signature_class)
-    values
-        ('tst_nix_cmd', 'nix_queue_cmd_template')
-    ;
-
-    with inserted as (
-        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
-        values (
-            'test1'
-            ,array['cmd', '--option-1', 'arg with spaces and $ and "', 'arg', 'arg with ''single-quoted'' text']
-            ,'VAR1=>"value 1", VAR_TWO=>val2'::hstore
-            ,E'Multiline\ntext\n'
-            ,$str$echo TXVsdGlsaW5lCnRleHQK | base64 -d | VAR1='value 1' VAR_TWO=val2 cmd --option-1 'arg with spaces and $ and "' arg 'arg with '\''single-quoted'\'' text'$str$
-        )
-        returning
-            *
-    )
-    select
-        inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd, false) as cmd_line_actual
-    from
-        inserted
-    into
-        _cmd
-    ;
-    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
-        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
-
-    with inserted as (
-        insert into tst_nix_cmd (cmd_id, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
-        values (
-            'test2'
-            ,array['cmd2', '--opt']
-            ,''::hstore
-            ,E'Just one line\n'
-            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 -- cmd2 --opt$str$
-        )
-        returning
-            *
-    )
-    select
-        inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
-    from
-        inserted
-    into
-        _cmd
-    ;
-    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
-        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
-
-    with inserted as (
-        insert into tst_nix_cmd (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin, cmd_line_expected)
-        values (
-            'test2'
-            ,'subid'
-            ,array['cmd2', '--opt']
-            ,''::hstore
-            ,E'Just one line\n'
-            ,$str$echo SnVzdCBvbmUgbGluZQo= | base64 -d | pg_nix_queue_cmd --output-update pg_temp.tst_nix_cmd test2 subid -- cmd2 --opt$str$
-        )
-        returning
-            *
-    )
-    select
-        inserted.*
-        ,nix_queue_cmd_line(inserted::tst_nix_cmd, true) as cmd_line_actual
-    from
-        inserted
-    into
-        _cmd
-    ;
-    assert _cmd.cmd_line_actual = _cmd.cmd_line_expected,
-        format(E'\n%s\n≠\n%s', _cmd.cmd_line_actual, _cmd.cmd_line_expected);
-end;
-$procedure$
-```
 
 #### Procedure: `test__pg_cmd_queue()`
 

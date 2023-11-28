@@ -28,7 +28,7 @@ REGRESS_OPTS += --launcher=$(PG_CMDQD_REGRESS_LAUNCHER) --temp-instance=$(CURDIR
 # subdirectory.
 SCRIPTS_built := $(PG_CMDQD_DEFAULT_TARGET)
 
-PG_CONFIG = pg_config
+PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 

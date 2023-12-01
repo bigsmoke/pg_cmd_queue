@@ -49,7 +49,6 @@ META.json: sql/META.sql install
 
 dist: META.json README.md
 	git archive --format zip --prefix=$(EXTENSION)-$(DISTVERSION)/ -o $(EXTENSION)-$(DISTVERSION).zip HEAD
-	git archive --format zip --prefix=$(EXTENSION)-$(DISTVERSION)/ -o $(EXTENSION)-$(DISTVERSION).zip HEAD
 
 test_dump_restore: TEST_DUMP_RESTORE_OPTIONS?=
 test_dump_restore: $(CURDIR)/bin/test_dump_restore.sh sql/test_dump_restore.sql

@@ -38,6 +38,7 @@ installcheck: $(PG_CMDQD_DEBUG_TARGET)
 # Set some environment variables for the regression tests that will be fed to `pg_regress`:
 installcheck: export PATH:=$(dir $(CURDIR)/$(PG_CMDQD_DEBUG_TARGET)):$(PATH)
 installcheck: export PG_CMDQD_BIN=$(CURDIR)/$(PG_CMDQD_DEBUG_TARGET)
+installcheck: export PG_CMDQD_LOG_FILE=$(CURDIR)/results/pg_cmdqd.log
 installcheck: export EXTENSION_NAME=$(EXTENSION)
 installcheck: export EXTENSION_ENTRY_VERSIONS=$(patsubst sql/$(EXTENSION)--%.sql,%,$(wildcard sql/$(EXTENSION)--[0-99].[0-99].[0-99].sql))
 

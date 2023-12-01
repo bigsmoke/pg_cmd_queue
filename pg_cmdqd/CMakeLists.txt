@@ -50,6 +50,7 @@ target_link_libraries(pg_nix_queue_cmd pthread ${LIBPQ_LINK_LIBRARIES})
 link_directories(pg_nix_queue_cmd ${LIBPQ_LIBRARY_DIRS})
 
 add_executable(with_cmdqd
+    fdguard.h fdguard.cpp
     pipefds.h pipefds.cpp
     with_cmdqd.cpp
 )

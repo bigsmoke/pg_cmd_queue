@@ -1,5 +1,6 @@
 #include <csignal>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "fdguard.h"
 
 const int CMDQD_SIGUSR1_TIMEOUT_S = 2;
 
@@ -79,6 +82,12 @@ void handle_signal(const int sig_num)
         return;
     }
 
+    if (sig_num == SIGCHLD)
+    {
+        // Nothing to do; let's bounce back to `waitpid()` and let that reap the dead child.
+        return;
+    }
+
     // Any other signal, at any other time, we will take as a hint to kill ourselves.
     clean_exit(128 + sig_num);
 }
@@ -92,6 +101,10 @@ int main(const int argc, const char *argv[])
         exit(EXIT_CMDQD_BIN_UNSPECIFIED);
     }
     std::string cmdqd_path(getenv("PG_CMDQD_BIN"));
+
+    std::optional<std::string> log_file;
+    if (getenv("PG_CMDQD_LOG_FILE") != nullptr)
+        log_file = std::string(getenv("PG_CMDQD_LOG_FILE"));
 
     for (int i = 1; i < argc; i++)
     {
@@ -128,6 +141,11 @@ int main(const int argc, const char *argv[])
     }
     if (cmdqd_pid == 0)
     {
+        if (log_file)
+        {
+            FdGuard log_file_fd(open(log_file.value().c_str(), O_WRONLY|O_TRUNC|O_CREAT,0644));
+            dup2(log_file_fd.fd(), STDOUT_FILENO);
+        }
         char const *cmdqd_argv[] = {
             cmdqd_path.c_str(),
             "--emit-sigusr1-when-ready",

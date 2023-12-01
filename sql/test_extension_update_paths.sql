@@ -119,6 +119,8 @@ begin
 
             -- TODO: Make this dynamictoo, but probably via a build step, because `EXECUTE`
             --       doesn't let through transaction control commands
+            set client_min_messages to WARNING;
+            -- \echo call cmdq.test_integration__pg_cmdqd('setup');
             call cmdq.test_integration__pg_cmdqd('setup');
             call cmdq.test_integration__pg_cmdqd('test');
             call cmdq.test_integration__pg_cmdqd('teardown');

@@ -85,13 +85,13 @@ void handle_signal(const int sig_num)
 
 int main(const int argc, const char *argv[])
 {
-    if (getenv("CMDQD_BIN") == nullptr)
+    if (getenv("PG_CMDQD_BIN") == nullptr)
     {
-        std::cerr << ANSI_RED << "with_cmdqd: " << ANSI_BOLD << "$CMDQD_BIN" << ANSI_NORMAL_INTENSITY
+        std::cerr << ANSI_RED << "with_cmdqd: " << ANSI_BOLD << "$PG_CMDQD_BIN" << ANSI_NORMAL_INTENSITY
                   << " environment variable not set." << ANSI_RESET << std::endl;
         exit(EXIT_CMDQD_BIN_UNSPECIFIED);
     }
-    std::string cmdqd_path(getenv("CMDQD_BIN"));
+    std::string cmdqd_path(getenv("PG_CMDQD_BIN"));
 
     for (int i = 1; i < argc; i++)
     {

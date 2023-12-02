@@ -40,7 +40,7 @@ The architecture is a bit deviant, but not overly complicated:
     *  If `cmd_queue.queue_reselect_randomized_every_nth is not null` and the
        reselect counter is divisable by this value, than the order of processing
        is randomized for that reselect round.
-2.  The command described in the tuple returned by the `SELECT` statement is
+3.  The command described in the tuple returned by the `SELECT` statement is
     run.  _How_ the command is run, depends on the `cmd_signature_class`:
     a.  If the _command queue_ table or view is derived from the
         `nix_queue_cmd_template`, then the \*nix command described by the
@@ -52,7 +52,7 @@ The architecture is a bit deviant, but not overly complicated:
         simpler; it's just a `sql_cmd`.  The results of running this `sql_cmd`
         are collected into `cmd_sql_result_status`, `cmd_sql_fatal_error`,
         `cmd_sql_nonfatal_errors` and `cmd_sql_result_rows`.
-3.  Still within the same transaction, an `UPDATE` is performed on the record
+4.  Still within the same transaction, an `UPDATE` is performed on the record
     (whether from a table or a view) identified by what should be a unique
     `cmd_id`/`cmd_subid` combination.
     *  `cmd_subid` may be `NULL` as it is matched using `IS NOT DISTINCT FROM`.
@@ -1584,39 +1584,264 @@ create table http_queue_cmd_template (
 
 --------------------------------------------------------------------------------------------------------------
 
-/*
-create procedure cmd_queue_session_start(cmd_queue)
-    set search_path from current
+create schema cmdqd;
+
+comment on schema cmdqd is
+$md$`pg_cmdqd` has to access the `cmdq` schema exclusively through this application-specific schema (ASS).
+$md$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create view cmdqd.cmd_queue as
+select
+    q.cmd_class
+    ,quote_ident(pg_namespace.nspname) || '.' || quote_ident(pg_class.relname) as cmd_class_identity
+    ,pg_class.relname as cmd_class_relname
+    ,q.cmd_signature_class
+    ,(parse_ident(q.cmd_signature_class::regclass::text))[
+        array_upper(parse_ident(q.cmd_signature_class::regclass::text), 1)
+    ] AS cmd_signature_class_relname
+    ,q.queue_runner_role
+    ,q.queue_notify_channel
+    ,extract('epoch' from q.queue_reselect_interval) * 10^3 AS queue_reselect_interval_msec
+    ,q.queue_reselect_randomized_every_nth
+    ,extract('epoch' from q.queue_select_timeout) as queue_select_timeout_sec
+    ,extract('epoch' from q.queue_cmd_timeout) AS queue_cmd_timeout_sec
+    ,q.queue_metadata_updated_at
+    ,color.ansi_fg
+from
+    cmdq.cmd_queue as q
+inner join
+    pg_catalog.pg_class
+    on pg_class.oid = q.cmd_class
+inner join
+    pg_catalog.pg_namespace
+    on pg_namespace.oid = pg_class.relnamespace
+cross join lateral
+    cmdq.cmd_class_color(cmd_class) as color
+where
+    q.queue_is_enabled
+;
+
+--------------------------------------------------------------------------------------------------------------
+
+create function cmdqd.select_cmd_from_queue_stmt(
+        cmd_queue$ cmdqd.cmd_queue
+        ,where_condition$ text
+        ,order_by_expression$ text
+    )
+    returns text
+    immutable
+    leakproof
+    parallel safe
+    language sql
+    return
+'SELECT
+    (pg_identify_object(''pg_class''::regclass, cmd_class, 0)).identity AS cmd_class_identity
+    ,(parse_ident(cmd_class::text))[
+        array_upper(parse_ident(cmd_class::text), 1)
+    ] AS cmd_class_relname
+    ,cmd_id
+    ,cmd_subid
+    ,extract(epoch from cmd_queued_since) AS cmd_queued_since' || case
+when ($1).cmd_signature_class = 'cmdq.sql_queue_cmd_template'::regclass then '
+    ,cmd_sql'
+when ($1).cmd_signature_class = 'cmdq.nix_queue_cmd_template'::regclass then '
+    ,cmd_argv
+    ,cmd_env
+    ,convert_from(cmd_stdin, ''UTF8'') AS cmd_stdin'
+when ($1).cmd_signature_class = 'cmdq.http_queue_cmd_template'::regclass then '
+    ,cmd_http_url text
+    ,cmd_http_version text
+    ,cmd_http_method text
+    ,cmd_http_request_headers hstore
+    ,cmd_http_request_body bytea' end || '
+FROM
+    ' || ($1).cmd_class::text || ' AS q
+WHERE
+    NOT EXISTS (
+        SELECT FROM
+            updated_cmd AS u
+        WHERE
+            u.cmd_id = q.cmd_id
+            AND u.cmd_subid IS NOT DISTINCT FROM q.cmd_subid
+    )
+    ' || coalesce('AND (
+        ' || where_condition$ || '
+    )',  '') || '
+' || coalesce('
+ORDER BY
+    ' || order_by_expression$ || '
+', '') || '
+LIMIT 1
+';
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure cmdqd.prepare_to_select_cmd_from_queue(cmdqd.cmd_queue)
+    language plpgsql
+    as $$
+begin
+    execute 'PREPARE select_oldest_cmd AS '
+        || cmdqd.select_cmd_from_queue_stmt($1, null, 'cmd_queued_since');
+    execute 'PREPARE select_random_cmd AS '
+        || cmdqd.select_cmd_from_queue_stmt($1, null, 'random()');
+    execute 'PREPARE select_notify_cmd AS '
+        || cmdqd.select_cmd_from_queue_stmt($1, 'cmd_id = $1 AND cmd_subid IS NOT DISTINCT FROM $2', null);
+end;
+$$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create function cmdqd.update_cmd_in_queue_stmt(cmdqd.cmd_queue)
+    returns text
+    immutable
+    leakproof
+    parallel safe
+    language sql
+    return
+'WITH updated_cmd_cte AS (
+    UPDATE
+        ' || ($1).cmd_class::text || '
+    SET
+        cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))' || case
+when ($1).cmd_signature_class = 'cmdq.sql_queue_cmd_template'::regclass then '
+        ,cmd_sql_result_status = $5
+        ,cmd_sql_result_rows = $6
+        ,cmd_sql_fatal_error = $7
+        ,cmd_sql_nonfatal_errors = $8'
+when ($1).cmd_signature_class = 'cmdq.nix_queue_cmd_template'::regclass then '
+        ,cmd_exit_code = $5
+        ,cmd_term_sig = $6
+        ,cmd_stdout = convert_to($7, ''UTF8'')
+        ,cmd_stderr = convert_to($8, ''UTF8'')'
+when ($1).cmd_signature_class = 'cmdq.http_queue_cmd_template'::regclass then '
+        ,cmd_http_response_headers = $5
+        ,cmd_http_response_body = $6' end || '
+    WHERE
+        cmd_id = $1
+        AND cmd_subid IS NOT DISTINCT from $2
+    RETURNING
+        cmd_id
+        ,cmd_subid
+)
+INSERT INTO updated_cmd (
+    cmd_id
+    ,cmd_subid
+)
+SELECT
+    cmd_id
+    ,cmd_subid
+FROM
+    updated_cmd_cte
+';
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure cmdqd.prepare_to_update_cmd_in_queue(cmdqd.cmd_queue)
+    language plpgsql
+    as $$
+begin
+    execute 'PREPARE update_cmd AS ' || cmdqd.update_cmd_in_queue_stmt($1);
+end;
+$$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure cmdqd.runner_session_start(cmdqd.cmd_queue)
+    set search_path to pg_catalog
     language plpgsql
     as $$
 begin
     if ($1).queue_runner_role is not null then
-        execute format('SET SESSION ROLE %I', ($1).queue_runner_role);
+        -- TODO
+        --execute format('SET SESSION ROLE %I', ($1).queue_runner_role);
     end if;
 
-    create temporary table update_erred_cmd (like queue_cmd_template including all);
+    perform set_config('pg_cmd_queue.runner.reselect_round', '0', false);
+
+    create temporary table updated_cmd (
+        cmd_id text
+            not null
+        ,cmd_subid text
+        ,unique nulls not distinct (cmd_id, cmd_subid)
+    );
+
+    call cmdqd.prepare_to_select_cmd_from_queue($1);
+    call cmdqd.prepare_to_update_cmd_in_queue($1);
+
+    -- Let the listener(s) know that the daemon is about to start selecting things from the queue:
+    perform pg_notify(
+        cmdq.pg_cmd_queue_notify_channel(),
+        row('cmdq.cmd_queue', ($1).cmd_class_identity, 'PREPARE')::text
+    );
+
+    if ($1).queue_notify_channel is not null then
+        execute format('LISTEN %I', ($1).queue_notify_channel);
+
+        -- Let everybody (interested) know that we're `LISTEN`ing:
+        perform pg_notify(
+            cmdq.pg_cmd_queue_notify_channel(),
+            row('cmdq.cmd_queue', ($1).cmd_class_identity, 'PREPARE')::text
+        );
+    end if;
 end;
 $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create function nix_queue_cmd_select(cmd_queue$ cmd_queue, reselect_round$ int)
-    returns nix_queue_cmd_template
-    volatile
-begin atomic
-    select
+create procedure cmdqd.runner_session_start(regclass)
+    language plpgsql
+    as $$
+declare
+    _q cmdqd.cmd_queue := (select row(q.*)::cmdqd.cmd_queue from cmdqd.cmd_queue as q where q.cmd_class = $1);
+begin
+    call cmdqd.runner_session_start(_q);
 end;
+$$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create procedure nix_queue_cmd_update(nix_queue_cmd_template)
-    set search_path from current
+create function cmdqd.enter_reselect_round()
+    returns table (
+        reselect_round bigint
+    )
+    set search_path to pg_catalog
+    language plpgsql
+    as $$
+declare
+    _reselect_round bigint := current_setting('pg_cmd_queue.runner.reselect_round')::bigint;
+begin
+    truncate updated_cmd;
+
+    if _reselect_round = 9223372036854775807 then
+        _reselect_round := 0;  -- Wrap around when we reached the max size of `bigint`.
+    end if;
+    perform set_config('pg_cmd_queue.runner.reselect_round', _reselect_round + 1);
+
+    return row(_reselect_round);
+end;
+$$;
+
+--------------------------------------------------------------------------------------------------------------
+
+create procedure cmdqd.remember_failed_update_for_this_reselect_round(cmd_id$ text, cmd_subid$ text = null)
     language plpgsql
     as $$
 begin
+    assert pg_current_xact_id_if_assigned() is null,
+        'The `ROLLBACK` after the failed `UPDATE` should have already happened prior to calling this proc.';
+
+    insert into updated_cmd (
+        cmd_id
+        ,cmd_subid
+    )
+    values (
+        cmd_id$
+        ,cmd_subid$
+    );
 end;
 $$;
-*/
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -2200,6 +2425,8 @@ begin
             for each row
             execute function queue_cmd__delete_after_update();
 
+        create role cmdq_test_role;
+
         insert into tst_nix_cmd__expect (
             cmd_id
             ,cmd_subid
@@ -2378,7 +2605,8 @@ $out$, 'UTF8')
         values (
             'tst_nix_cmd'
             ,'nix_queue_cmd_template'
-            ,'cmdq_test_role'
+            --,'cmdq_test_role'
+            ,null
             ,'tst_nix_cmd'
             ,'1 day'::interval  -- Let's make sure that we're testing the event stuff for real
             ,'2 second'::interval
@@ -2437,6 +2665,7 @@ $out$, 'UTF8')
 
     elsif test_stage$ = 'teardown' then
         delete from cmd_queue where cmd_class = 'cmdq.tst_nix_cmd'::regclass;
+        drop role cmdq_test_role;
         drop table tst_nix_cmd cascade;
         drop table tst_nix_cmd__actual cascade;
         drop table tst_nix_cmd__expect cascade;

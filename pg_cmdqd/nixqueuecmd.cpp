@@ -26,36 +26,6 @@
 
 const int GRACE_SECONDS_BETWEEN_SIGTERM_AND_SIGKILL = 1;
 
-std::string NixQueueCmd::select_stmt(
-        const CmdQueue &cmd_queue,
-        const std::optional<std::string> &where,
-        const std::optional<std::string> &order_by)
-{
-    return std::string(R"SQL(
-SELECT
-    (pg_identify_object('pg_class'::regclass, cmd_class, 0)).identity AS cmd_class_identity
-    ,(parse_ident(cmd_class::text))[
-        array_upper(parse_ident(cmd_class::text), 1)
-    ] AS cmd_class_relname
-    ,cmd_id
-    ,cmd_subid
-    ,extract(epoch from cmd_queued_since) AS cmd_queued_since
-    ,cmd_argv
-    ,cmd_env
-    ,convert_from(cmd_stdin, 'UTF8') AS cmd_stdin
-FROM
-    )SQL" + cmd_queue.cmd_class_identity /* (already quoted) */ + R"SQL(
-WHERE
-    cmd_runtime IS NULL)SQL" + ( where ? R"SQL(
-    AND )SQL" + where.value() : "") + R"SQL(
-)SQL" + (order_by ? R"SQL(
-ORDER BY
-    )SQL" + order_by.value() : "") + R"SQL(
-LIMIT 1
-FOR UPDATE SKIP LOCKED
-)SQL");
-}
-
 /*
 std::string NixQueueCmd::select::notify(const CmdQueue &cmd_queue)
 {
@@ -87,25 +57,6 @@ WHERE
             PQ::escapeByteaConn(conn, cmd_stderr).c_str(),
             meta.cmd_id.c_str(),
             meta.cmd_subid ? PQ::escapeLiteral(conn, meta.cmd_subid.value()).c_str() : "NULL"
-        );
-}
-
-std::string NixQueueCmd::update_stmt(const CmdQueue &cmd_queue)
-{
-    return formatString(R"SQL(
-UPDATE
-    cmdq.%s
-SET
-    cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))
-    ,cmd_exit_code = $5
-    ,cmd_term_sig = $6
-    ,cmd_stdout = convert_to($7, 'UTF8')
-    ,cmd_stderr = convert_to($8, 'UTF8')
-WHERE
-    cmd_id = $1
-    AND cmd_subid IS NOT DISTINCT from $2
-)SQL",
-            cmd_queue.cmd_class_relname.c_str()
         );
 }
 

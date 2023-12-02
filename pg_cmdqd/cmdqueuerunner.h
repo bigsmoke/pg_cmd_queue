@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 
@@ -32,101 +33,6 @@ class CmdQueueRunner
     Logger *logger = Logger::getInstance();
     bool _is_prepared = false;
 
-    void _setup_session(std::shared_ptr<PG::conn> &conn)
-    {
-        PQ::exec(conn, "SET search_path TO cmdq");
-
-        /*
-        if (_cmd_queue.queue_runner_role)
-        {
-            logger->log(LOG_INFO, "Setting role to \x1b[1m%s\x1b[22m", _cmd_queue.queue_runner_role.value().c_str());
-            std::shared_ptr<PG::result> set_role_result = PQ::exec(conn, formatString(
-                "SET ROLE TO %s",
-                PQescapeIdentifier(
-                    conn->get(),
-                    _cmd_queue.queue_runner_role.value().c_str(),
-                    _cmd_queue.queue_runner_role.value().length()
-                )
-            ));
-            if (PQ::resultStatus(set_role_result) != PGRES_COMMAND_OK)
-            {
-                logger->log(LOG_ERROR, "`SET ROLE` command failed: %s", PQ::resultErrorMessage(set_role_result).c_str());
-            }
-        }
-        */
-
-        if (_cmd_queue.queue_notify_channel)
-        {
-            // Listen:
-            std::shared_ptr<PG::result> listen_result = PQ::exec(
-                conn, std::string("LISTEN \"") + _cmd_queue.queue_notify_channel.value() + "\"");
-            if (PQ::resultStatus(listen_result) != PGRES_COMMAND_OK)
-                logger->log(LOG_ERROR, "Failed to LISTEN on `%s` channel: %s",
-                            _cmd_queue.queue_notify_channel.value().c_str(),
-                            PQ::resultErrorMessage(listen_result).c_str());
-
-            // And lets the world know that we're listening:
-            std::shared_ptr<PG::result> notify_listen_result = PQ::execParams(
-                conn,
-                "SELECT pg_notify(pg_cmd_queue_notify_channel(), row($1::text, $2::text, $3::text)::text)",
-                3, {}, {CmdQueue::CMD_QUEUE_RELNAME, _cmd_queue.cmd_class_identity, "LISTEN"});
-            if (PQ::resultStatus(notify_listen_result) != PGRES_TUPLES_OK)
-                logger->log(LOG_ERROR, "Failed to `NOTIFY` listening status: %s",
-                            PQ::resultErrorMessage(notify_listen_result).c_str());
-        }
-    }
-
-    void _prepare_statements(std::shared_ptr<PG::conn> &conn)
-    {
-        {
-            std::shared_ptr<PG::result> result = PQ::prepare(
-                conn, "select_oldest", T::select_stmt(_cmd_queue, {}, "cmd_queued_since"));
-            if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
-            {
-                logger->log(LOG_ERROR, "Preparing `select_oldest` statement failed: %s",
-                            PQerrorMessage(conn->get()));
-            }
-        }
-        {
-            // If `ORDER BY random() LIMIT` turns out to be too slow we could do:
-            // `OFFSET floor(random() * (SELECT count(*) FROM <some_nix_queue_cmd>)) LIMIT 1`
-            std::shared_ptr<PG::result> result = PQ::prepare(
-                conn, "select_random", T::select_stmt(_cmd_queue, {}, "random()"));
-            if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
-            {
-                logger->log(LOG_ERROR, "Preparing `select_random` statement failed: %s",
-                            PQerrorMessage(conn->get()));
-            }
-        }
-        {
-            std::shared_ptr<PG::result> result = PQ::prepare(
-                conn, "select_notified",
-                T::select_stmt(_cmd_queue, "cmd_id = $1 AND cmd_subid IS NOT DISTINCT FROM $2", {}));
-            if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
-            {
-                logger->log(LOG_ERROR, "Preparing `select_notified` statement failed: %s",
-                            PQerrorMessage(conn->get()));
-            }
-        }
-    }
-
-    void _notify_preparedness(std::shared_ptr<PG::conn> &conn)
-    {
-        // Let the listener(s) know that we're about to start selecting things from the queue
-        std::shared_ptr<PG::result> result = PQ::execParams(
-            conn,
-            "SELECT pg_notify(pg_cmd_queue_notify_channel(), row($1::text, $2::text, $3::text)::text)",
-            3, {}, {CmdQueue::CMD_QUEUE_RELNAME, _cmd_queue.cmd_class_identity, "PREPARE"});
-
-        if (PQ::resultStatus(result) != PGRES_TUPLES_OK)
-        {
-            logger->log(LOG_ERROR, "Failed to `NOTIFY` preparedness: %s", PQ::resultErrorMessage(result).c_str());
-            _is_prepared = false;
-        }
-        else
-            _is_prepared = true;
-    }
-
     void _run()
     {
         _running = true;
@@ -141,21 +47,33 @@ class CmdQueueRunner
         while (this->_keep_running)
         {
             maintain_connection(_conn_str, conn);
+
+            {
+                // The `cmdqd.runner_session_start()` function:
+                //   1. `SET`s SQL-level settings for the queue, and
+                //   2. `PREPARE`s the statements we will use to `SELECT FROM` and `UPDATE` the cmd queue.
+                std::shared_ptr<PG::result> proc_result = PQ::execParams(
+                        conn, std::string("CALL cmdqd.runner_session_start($1::regclass)"),
+                        1, {}, {_cmd_queue.cmd_class_identity});
+                if (PQ::resultStatus(proc_result) != PGRES_COMMAND_OK)
+                {
+                    logger->log(LOG_ERROR, "Failure during `runner_session_start()`: %s",
+                                PQ::resultErrorMessage(proc_result).c_str());
+                    break;  // We have no way to recover from this (yet) without getting into an infinite loop.
+                }
+            }
+
             poll_fds[0] = {PQ::socket(conn), POLLIN | POLLPRI, 0};
             poll_fds[1] = {kill_pipe_fds.read_fd(), POLLIN | POLLPRI, 0};
 
-            _setup_session(conn);
-
-            _prepare_statements(conn);
             if (selected_field_numbers.size() == 0)
             {
                 // The field mappings are the same for all the `SELECT` statements of the same `T`.
-                std::shared_ptr<PG::result> result = PQ::describePrepared(conn, "select_oldest");
+                std::shared_ptr<PG::result> result = PQ::describePrepared(conn, "select_oldest_cmd");
                 selected_field_numbers = PQ::fnumbers(result);
             }
-            _notify_preparedness(conn);
 
-            int reselect_found_count = 0;
+            int reselect_round = 0;
             std::chrono::steady_clock::time_point reselect_next_when = std::chrono::steady_clock::now();
 
             std::optional<std::tuple<std::string, std::string, std::optional<std::string>>> notify_cmd = {};
@@ -179,18 +97,18 @@ class CmdQueueRunner
                                     : "NULL");
 
                     select_result = PQ::execPrepared(
-                        conn, "select_notified", 2,
+                        conn, "select_notify_cmd", 2,
                         {std::get<1>(notify_cmd.value()), std::get<2>(notify_cmd.value())});
                 }
-                else if (_cmd_queue.queue_reselect_randomized_every_nth and reselect_found_count % _cmd_queue.queue_reselect_randomized_every_nth.value() == 0)
+                else if (_cmd_queue.queue_reselect_randomized_every_nth and reselect_round % _cmd_queue.queue_reselect_randomized_every_nth.value() == 0)
                 {
                     logger->log(LOG_DEBUG3, "Getting random queue_cmd from cmd_queue…");
-                    select_result = PQ::execPrepared(conn, "select_random");
+                    select_result = PQ::execPrepared(conn, "select_random_cmd");
                 }
                 else
                 {
                     logger->log(LOG_DEBUG3, "Getting oldest queue_cmd from cmd_queue…");
-                    select_result = PQ::execPrepared(conn, "select_oldest");
+                    select_result = PQ::execPrepared(conn, "select_oldest_cmd");
                 }
 
                 if (PQ::resultStatus(select_result) != PGRES_TUPLES_OK)
@@ -200,8 +118,6 @@ class CmdQueueRunner
                 }
                 else if (PQntuples(select_result->get()) == 1)
                 {
-                    reselect_found_count++;
-
                     T queue_cmd(select_result, 0, selected_field_numbers);
 
                     queue_cmd.meta.stamp_start_time();
@@ -212,16 +128,24 @@ class CmdQueueRunner
 
                     queue_cmd.meta.stamp_end_time();
 
-                    std::shared_ptr<PG::result> update_result = PQ::execParams(
-                        conn,
-                        queue_cmd.update_stmt(_cmd_queue),
-                        queue_cmd.update_params().size(),
-                        {},
-                        queue_cmd.update_params());
+                    std::shared_ptr<PG::result> update_result = PQ::execPrepared(
+                            conn, "update_cmd", queue_cmd.update_params().size(),
+                            queue_cmd.update_params());
                     if (PQ::resultStatus(update_result) != PGRES_COMMAND_OK)
                     {
                         logger->log(LOG_ERROR, "SQL UPDATE for command %s failed: %s",
                                     queue_cmd.meta.cmd_id.c_str(), PQ::resultErrorMessage(update_result).c_str());
+
+                        PQ::exec(conn, "ROLLBACK TRANSACTION");
+
+                        std::shared_ptr<PG::result> log_failed_update_result = PQ::execParams(
+                                conn, "CALL cmdqd.remember_failed_update_for_this_reselect_round($1, $2)",
+                                2, {}, {queue_cmd.meta.cmd_id, queue_cmd.meta.cmd_subid});
+                        if (PQ::resultStatus(log_failed_update_result) != PGRES_COMMAND_OK)
+                        {
+                            logger->log(LOG_ERROR, "Even registering the failed update failed: %s",
+                                        PQ::resultErrorMessage(log_failed_update_result).c_str());
+                        }
                     }
                 }
                 else
@@ -237,9 +161,13 @@ class CmdQueueRunner
                         // That's why we only postpone the re`SELECT` when we were _not_ `SELECT`ing in response
                         // to a `NOTIFY` event.
                         reselect_next_when = std::chrono::steady_clock::now() + std::chrono::milliseconds(_cmd_queue.queue_reselect_interval_msec);
+                        if (reselect_round == std::numeric_limits<int>::max())
+                            reselect_round = 0;  // We go round and round and round…
+                        else
+                            reselect_round++;
 
                         logger->log(LOG_DEBUG5,
-                                    "After this transaction, we're going to poll() and wait for ~ %i msec",
+                                    "Before the next (re)select round, we're going to poll() and wait for ~ %i msec",
                                     std::chrono::duration_cast<std::chrono::milliseconds>(
                                         reselect_next_when - std::chrono::steady_clock::now())
                                         .count());

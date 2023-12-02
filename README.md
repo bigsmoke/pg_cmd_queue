@@ -1,8 +1,8 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-11-28 15:46:18.351053+00
-pg_readme_version: 0.6.4
+pg_readme_generated_at: 2023-12-01 20:26:14.477871+00
+pg_readme_version: 0.6.5
 ---
 
 # The `pg_cmd_queue` PostgreSQL extension
@@ -40,7 +40,7 @@ The architecture is a bit deviant, but not overly complicated:
     *  If `cmd_queue.queue_reselect_randomized_every_nth is not null` and the
        reselect counter is divisable by this value, than the order of processing
        is randomized for that reselect round.
-2.  The command described in the tuple returned by the `SELECT` statement is
+3.  The command described in the tuple returned by the `SELECT` statement is
     run.  _How_ the command is run, depends on the `cmd_signature_class`:
     a.  If the _command queue_ table or view is derived from the
         `nix_queue_cmd_template`, then the \*nix command described by the
@@ -52,7 +52,7 @@ The architecture is a bit deviant, but not overly complicated:
         simpler; it's just a `sql_cmd`.  The results of running this `sql_cmd`
         are collected into `cmd_sql_result_status`, `cmd_sql_fatal_error`,
         `cmd_sql_nonfatal_errors` and `cmd_sql_result_rows`.
-3.  Still within the same transaction, an `UPDATE` is performed on the record
+4.  Still within the same transaction, an `UPDATE` is performed on the record
     (whether from a table or a view) identified by what should be a unique
     `cmd_id`/`cmd_subid` combination.
     *  `cmd_subid` may be `NULL` as it is matched using `IS NOT DISTINCT FROM`.
@@ -483,6 +483,19 @@ The `http_queue_cmd_template` table has 12 attributes:
 
 12. `http_queue_cmd_template.cmd_http_response_body` `bytea`
 
+### Views
+
+#### View: `cmdqd.cmd_queue`
+
+```sql
+ SELECT q.cmd_class, q.cmd_signature_class, q.queue_runner_role,
+    q.queue_notify_channel, q.queue_reselect_interval,
+    q.queue_reselect_randomized_every_nth, q.queue_select_timeout,
+    q.queue_cmd_timeout, q.queue_metadata_updated_at
+   FROM cmd_queue q
+  WHERE q.queue_is_enabled;
+```
+
 ### Routines
 
 #### Procedure: `assert_queue_cmd_run_result (regclass, nix_queue_cmd_template, interval)`
@@ -539,6 +552,70 @@ Function arguments:
 |   `$1` |       `IN` | `cmd_argv$`                                                       | `text[]`                                                             |  |
 |   `$2` |       `IN` | `cmd_env$`                                                        | `hstore`                                                             | `''::hstore` |
 |   `$3` |       `IN` | `cmd_stdin$`                                                      | `bytea`                                                              | `'\x'::bytea` |
+
+Function return type: `text`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
+#### Function: `cmdqd.enter_reselect_round()`
+
+Function return type: `TABLE(reselect_round bigint)`
+
+Function attributes: ROWS 1000
+
+Function-local settings:
+
+  *  `SET search_path TO pg_catalog`
+
+#### Procedure: `cmdqd.prepare_to_select_cmd_from_queue (cmdqd.cmd_queue)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `cmdqd.cmd_queue`                                                    |  |
+
+#### Procedure: `cmdqd.prepare_to_update_cmd_in_queue (cmdqd.cmd_queue)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `cmdqd.cmd_queue`                                                    |  |
+
+#### Procedure: `cmdqd.runner_session_start (cmdqd.cmd_queue)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `cmdqd.cmd_queue`                                                    |  |
+
+Procedure-local settings:
+
+  *  `SET search_path TO pg_catalog`
+
+#### Function: `cmdqd.select_cmd_from_queue_stmt (cmdqd.cmd_queue, text, text)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | `cmd_queue$`                                                      | `cmdqd.cmd_queue`                                                    |  |
+|   `$2` |       `IN` | `where_condition$`                                                | `text`                                                               |  |
+|   `$3` |       `IN` | `order_by_expression$`                                            | `text`                                                               |  |
+
+Function return type: `text`
+
+Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
+#### Function: `cmdqd.update_cmd_in_queue_stmt (cmdqd.cmd_queue)`
+
+Function arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` |                                                                   | `cmdqd.cmd_queue`                                                    |  |
 
 Function return type: `text`
 

@@ -1,6 +1,8 @@
 #ifndef PQ_UTILS_H
 #define PQ_UTILS_H
 
+#include <functional>
+
 #include "pq-raii/libpq-raii.hpp"
 #include "logger.h"
 

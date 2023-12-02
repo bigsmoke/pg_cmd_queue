@@ -10,29 +10,19 @@ const std::string CmdQueue::CMD_QUEUE_RELNAME = "cmd_queue";
 
 const std::string CmdQueue::SELECT_STMT = R"SQL(
     SELECT
-        (pg_identify_object('pg_class'::regclass, q.cmd_class, 0)).identity AS cmd_class_identity
-        ,(parse_ident(q.cmd_class::regclass::text))[
-            array_upper(parse_ident(q.cmd_class::regclass::text), 1)
-        ] AS cmd_class_relname
-        ,(parse_ident(q.cmd_signature_class::regclass::text))[
-            array_upper(parse_ident(q.cmd_signature_class::regclass::text), 1)
-        ] AS cmd_signature_class_relname
-        ,q.queue_runner_role::text
-        ,q.queue_notify_channel
-        ,extract('epoch' from q.queue_reselect_interval) * 10^3 AS queue_reselect_interval_msec
-        ,q.queue_reselect_randomized_every_nth
-        ,extract('epoch' from q.queue_cmd_timeout) AS queue_cmd_timeout_sec
-        ,color.ansi_fg
+        cmd_class_identity
+        ,cmd_class_relname
+        ,cmd_signature_class_relname
+        ,queue_runner_role::text
+        ,queue_notify_channel
+        ,queue_reselect_interval_msec
+        ,queue_reselect_randomized_every_nth
+        ,queue_cmd_timeout_sec
+        ,ansi_fg
     FROM
-        cmdq.cmd_queue as q
-    INNER JOIN
-        pg_catalog.pg_class as r
-        ON r.oid = q.cmd_class
-    CROSS JOIN LATERAL
-        cmdq.cmd_class_color(cmd_class) as color
+        cmdqd.cmd_queue
     WHERE
         (NULLIF($1, '{}'::text[]) IS NULL OR cmd_class = ANY ($1::regclass[]))
-        AND queue_is_enabled
 )SQL";
 
 /**

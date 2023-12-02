@@ -62,6 +62,12 @@ namespace PG
         {
             return this->raw_conn_ptr;
         }
+
+        inline void finish()
+        {
+            PQfinish(raw_conn_ptr);
+            raw_conn_ptr = nullptr;
+        }
     };
 
     class result

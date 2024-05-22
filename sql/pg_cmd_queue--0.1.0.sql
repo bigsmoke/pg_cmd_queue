@@ -1649,7 +1649,7 @@ when ($1).cmd_signature_class = 'cmdq.sql_queue_cmd_template'::regclass then '
 when ($1).cmd_signature_class = 'cmdq.nix_queue_cmd_template'::regclass then '
     ,cmd_argv
     ,cmd_env
-    ,convert_from(cmd_stdin, ''UTF8'') AS cmd_stdin'
+    ,convert_from(cmd_stdin, ''UTF8'') AS cmd_stdin'  -- FIXME: We shouldn't assume text, let alone UTF-8.
 when ($1).cmd_signature_class = 'cmdq.http_queue_cmd_template'::regclass then '
     ,cmd_http_url text
     ,cmd_http_version text

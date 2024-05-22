@@ -38,7 +38,9 @@ public:
 
     bool is_valid() const;
 
-    std::vector<std::optional<std::string>> update_params();
+    std::vector<std::optional<std::string>> update_params() const;
+    std::vector<int> update_param_lengths() const;
+    std::vector<int> update_param_formats() const;
 
     void run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cmd_timeout_sec);
 };

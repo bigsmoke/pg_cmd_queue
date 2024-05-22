@@ -49,7 +49,9 @@ public:
 
     std::string update_stmt(const std::shared_ptr<PG::conn> &conn);
 
-    std::vector<std::optional<std::string>> update_params();
+    std::vector<std::optional<std::string>> update_params() const;
+    std::vector<int> update_param_lengths() const;
+    std::vector<int> update_param_formats() const;
 
     std::string cmd_line() const;
 

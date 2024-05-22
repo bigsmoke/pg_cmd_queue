@@ -60,7 +60,7 @@ WHERE
         );
 }
 
-std::vector<std::optional<std::string>> NixQueueCmd::update_params()
+std::vector<std::optional<std::string>> NixQueueCmd::update_params() const
 {
     std::vector<std::optional<std::string>> params;
     params.reserve(8);
@@ -75,6 +75,16 @@ std::vector<std::optional<std::string>> NixQueueCmd::update_params()
     params.push_back(cmd_stderr);
 
     return params;
+}
+
+std::vector<int> NixQueueCmd::update_param_lengths() const
+{
+    return {-1, -1, -1, -1, -1, -1, (const int)this->cmd_stdout.length(), (const int)this->cmd_stderr.length()};
+}
+
+std::vector<int> NixQueueCmd::update_param_formats() const
+{
+    return {0, 0, 0, 0, 0, 0, 1, 1};
 }
 
 NixQueueCmd::NixQueueCmd(

@@ -13,7 +13,7 @@ std::string SqlQueueCmd::select::notify(const CmdQueue &cmd_queue)
 }
 */
 
-std::vector<std::optional<std::string>> SqlQueueCmd::update_params()
+std::vector<std::optional<std::string>> SqlQueueCmd::update_params() const
 {
     std::vector<std::optional<std::string>> params;
     params.reserve(8);
@@ -44,6 +44,16 @@ std::vector<std::optional<std::string>> SqlQueueCmd::update_params()
     }
 
     return params;
+}
+
+std::vector<int> SqlQueueCmd::update_param_lengths() const
+{
+    return {};
+}
+
+std::vector<int> SqlQueueCmd::update_param_formats() const
+{
+    return {};
 }
 
 SqlQueueCmd::SqlQueueCmd(

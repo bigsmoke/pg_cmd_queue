@@ -130,7 +130,8 @@ class CmdQueueRunner
 
                     std::shared_ptr<PG::result> update_result = PQ::execPrepared(
                             conn, "update_cmd", queue_cmd.update_params().size(),
-                            queue_cmd.update_params());
+                            queue_cmd.update_params(), queue_cmd.update_param_lengths(),
+                            queue_cmd.update_param_formats());
                     if (PQ::resultStatus(update_result) != PGRES_COMMAND_OK)
                     {
                         logger->log(LOG_ERROR, "SQL UPDATE for command %s failed: %s",

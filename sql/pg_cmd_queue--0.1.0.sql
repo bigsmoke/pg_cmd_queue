@@ -2374,7 +2374,7 @@ create procedure test_integration__pg_cmdqd(test_stage$ text)
 declare
     _expect record;
     _actual record;
-    _valid_test_stages constant text[] := array['setup', 'test', 'teardown'];
+    _valid_test_stages constant text[] := array['configure', 'setup', 'test', 'teardown'];
 begin
     -- Because this procedure executes transaction control statements, we cannot attach these as `SET`
     -- clauses to the `CREATE PROCEDURE` statement.  Let's bluntly override the session-level settings.

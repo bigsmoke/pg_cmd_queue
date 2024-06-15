@@ -516,7 +516,7 @@ namespace PQ
     {
         std::vector<V> values;
         values.reserve(m.size());
-        for (const std::pair<K,V> &p : m)
+        for (const std::pair<const K,V> &p : m)
             values.push_back(p.second);
 
         return values;

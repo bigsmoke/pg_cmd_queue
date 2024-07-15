@@ -1818,9 +1818,9 @@ begin
     if _reselect_round = 9223372036854775807 then
         _reselect_round := 0;  -- Wrap around when we reached the max size of `bigint`.
     end if;
-    perform set_config('pg_cmd_queue.runner.reselect_round', _reselect_round + 1);
+    perform set_config('pg_cmd_queue.runner.reselect_round', (_reselect_round + 1)::text, false);
 
-    return row(_reselect_round);
+    return query select _reselect_round;
 end;
 $$;
 

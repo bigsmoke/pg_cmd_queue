@@ -162,10 +162,18 @@ class CmdQueueRunner
                         // That's why we only postpone the re`SELECT` when we were _not_ `SELECT`ing in response
                         // to a `NOTIFY` event.
                         reselect_next_when = std::chrono::steady_clock::now() + std::chrono::milliseconds(_cmd_queue.queue_reselect_interval_msec);
-                        if (reselect_round == std::numeric_limits<int>::max())
-                            reselect_round = 0;  // We go round and round and round…
-                        else
-                            reselect_round++;
+
+                        std::shared_ptr<PG::result> proc_result = PQ::exec(
+                                conn, std::string("SELECT reselect_round FROM cmdqd.enter_reselect_round()"));
+                        if (PQ::resultStatus(proc_result) != PGRES_TUPLES_OK)
+                        {
+                            logger->log(LOG_ERROR, "Failure during `enter_reselect_round()`: %s",
+                                        PQ::resultErrorMessage(proc_result).c_str());
+                            return;  // FIXME: We should find a way to properly recover.
+                        }
+
+                        const std::string result_round_str = PQ::getvalue(proc_result, 0, 0);
+                        reselect_round = std::stoi(result_round_str);
 
                         logger->log(LOG_DEBUG5,
                                     "Before the next (re)select round, we're going to poll() and wait for ~ %i msec",
@@ -174,7 +182,9 @@ class CmdQueueRunner
                                         .count());
                     }
                     else
+                    {
                         logger->log(LOG_DEBUG5, "Could not find new cmd that I was notified of in queue");
+                    }
                 }
 
                 if (PQ::transactionStatus(conn) == PQTRANS_UNKNOWN)

@@ -249,7 +249,6 @@ class CmdQueueRunner
                                 notify_payload_fields[0].value(),
                                 notify_payload_fields[1].value(),
                                 notify_payload_fields[2]);
-                            assert(std::get<2>(notify_cmd.value()).has_value() == false);
                             break; // We found a notication.  Let's go to the select loop to get the cmd.
                         }
                         else

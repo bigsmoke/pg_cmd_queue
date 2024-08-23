@@ -1629,6 +1629,7 @@ create function cmdqd.select_cmd_from_queue_stmt(
         cmd_queue$ cmdqd.cmd_queue
         ,where_condition$ text
         ,order_by_expression$ text
+        ,exclude_already_updated_in_this_reselect_round$ bool = true
     )
     returns text
     immutable
@@ -1659,17 +1660,20 @@ when ($1).cmd_signature_class = 'cmdq.http_queue_cmd_template'::regclass then '
 FROM
     ' || ($1).cmd_class::text || ' AS q
 WHERE
-    NOT EXISTS (
+    ' || concat_ws('AND '
+            ,case when exclude_already_updated_in_this_reselect_round$ then 'NOT EXISTS (
         SELECT FROM
             updated_cmd AS u
         WHERE
             u.cmd_id = q.cmd_id
             AND u.cmd_subid IS NOT DISTINCT FROM q.cmd_subid
     )
-    ' || coalesce('AND (
+    '
+            end
+            ,'(
         ' || where_condition$ || '
-    )',  '') || '
-' || coalesce('
+    )'
+        ) || coalesce('
 ORDER BY
     ' || order_by_expression$ || '
 ', '') || '
@@ -1688,7 +1692,7 @@ begin
     execute 'PREPARE select_random_cmd AS '
         || cmdqd.select_cmd_from_queue_stmt($1, null, 'random()');
     execute 'PREPARE select_notify_cmd AS '
-        || cmdqd.select_cmd_from_queue_stmt($1, 'cmd_id = $1 AND cmd_subid IS NOT DISTINCT FROM $2', null);
+        || cmdqd.select_cmd_from_queue_stmt($1, 'cmd_id = $1 AND cmd_subid IS NOT DISTINCT FROM $2', null, false);
 end;
 $$;
 
@@ -1735,6 +1739,7 @@ SELECT
     ,cmd_subid
 FROM
     updated_cmd_cte
+ON CONFLICT (cmd_id, cmd_subid) DO NOTHING
 ';
 
 --------------------------------------------------------------------------------------------------------------

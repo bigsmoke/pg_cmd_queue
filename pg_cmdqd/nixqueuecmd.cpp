@@ -165,6 +165,34 @@ bool NixQueueCmd::cmd_succeeded() const
     return cmd_exit_code.has_value() and cmd_exit_code.value() == 0;
 }
 
+void NixQueueCmd::flush_stderr(LogLevel level, bool flush_on_end)
+{
+    std::string_view v = std::string_view(cmd_stderr).substr(flush_stderr_pos, cmd_stderr.size());
+
+    std::string line;
+    for (char c : v)
+    {
+        if (c == '\n' || c == '\r')
+        {
+            if (!line.empty())
+                logger->log(level, line.c_str());
+            line.clear();
+        }
+        else
+        {
+            line.push_back(c);
+        }
+
+        flush_stderr_pos++;
+    }
+
+    // On exit you also want lines ending without newline, but while running, it may be incomplete data.
+    if (flush_on_end && !line.empty())
+    {
+        logger->log(level, line.c_str());
+    }
+}
+
 /*
 void NixQueueCmd::_run_fork_parent_logic()
 {
@@ -464,6 +492,9 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
                     this->cmd_term_sig = SIGABRT;
                     break;
                 }
+
+                // Stderr while running is likely progress output in our scripots.
+                flush_stderr(LogLevel::LOG_NOTICE, false);
             }
 
             if (fds[0].revents & (POLLERR | POLLHUP))
@@ -533,8 +564,15 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
             );
         if (cmd_term_sig.has_value())
             logger->log(LOG_ERROR, "Command %s terminated with signal: %i / %s", meta.cmd_id.c_str(), cmd_term_sig.value(), strsignal(cmd_term_sig.value()));
+
+        logger->log(LOG_ERROR, "==== BEGIN PROCESS STDERR ===");
+
+        // Repeat the stderr as error when the command failed. There will be some duplicate logging, but by lack of a 'stdlog', it's unavoidable.
+        this->flush_stderr_pos = 0;
+        flush_stderr(LogLevel::LOG_ERROR, true);
+
+        logger->log(LOG_ERROR, "==== END PROCESS STDERR ===");
     }
 
     logger->logstream(LOG_DEBUG5) << "Command " << meta.cmd_id << " STDOUT: " << cmd_stdout;
-    logger->logstream(LOG_DEBUG5) << "Command " << meta.cmd_id << " STDERR: " << cmd_stderr;
 }

@@ -21,6 +21,10 @@ class NixQueueCmd
 
     bool cmd_succeeded() const;
 
+    int flush_stderr_pos = 0;
+
+    void flush_stderr(LogLevel level, bool flush_on_end);
+
 public:
     QueueCmdMetadata meta;
 

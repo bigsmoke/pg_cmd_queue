@@ -3,7 +3,7 @@
 #include "pq_cmdqd_utils.h"
 #include "sigstate.h"
 
-void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> &conn)
+void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> &conn, bool one_shot)
 {
     static Logger *logger = Logger::getInstance();
 
@@ -33,13 +33,17 @@ void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> 
                 break;
             }
 
+            if (one_shot)
+                break;
+
             logger->log(LOG_ERROR, "Failed to connect to database: %s", PQerrorMessage(conn->get()));
             logger->log(LOG_INFO, "Will retry connecting in %i seconds…", connect_retry_seconds);
+
             std::this_thread::sleep_for(std::chrono::seconds(connect_retry_seconds));
             if (connect_retry_seconds * 2 <= max_connect_retry_seconds) connect_retry_seconds *= 2;
         }
     }
-    else if (PQ::status(conn) == CONNECTION_BAD)
+    else if (PQ::status(conn) == CONNECTION_BAD && !one_shot)
     {
         // TODO: It would probably be better to exit the thread and let the main thread restart it when needed
         int connect_retry_seconds = 1;

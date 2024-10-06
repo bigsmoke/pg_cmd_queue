@@ -34,9 +34,37 @@ CmdQueueRunnerManager *CmdQueueRunnerManager::get_instance()
     return CmdQueueRunnerManager::_instance;
 }
 
-void CmdQueueRunnerManager::maintain_connection()
+void CmdQueueRunnerManager::maintain_connection(bool one_shot)
 {
-    ::maintain_connection(_conn_str, _conn);
+    ::maintain_connection(_conn_str, _conn, one_shot);
+}
+
+std::vector<std::string> CmdQueueRunnerManager::get_cmd_class_names()
+{
+    maintain_connection(true);
+
+    if (!_conn || PQ::status(_conn) != CONNECTION_OK)
+        throw std::runtime_error("No connection.");
+
+    std::vector<std::string> return_value;
+
+    // TODO: Rowan's API pattern is that we get this info from schema cmdqd, but the view there is filtered.
+    std::shared_ptr<PG::result> qresult = PQ::exec(_conn, "SELECT cmd_class FROM cmdq.cmd_queue");
+
+    if (!qresult)
+        throw std::runtime_error("No result");
+
+    if (PQ::resultStatus(qresult) != PGRES_TUPLES_OK)
+        throw std::runtime_error(PQ::resultErrorMessage(qresult));
+
+    std::unordered_map<std::string, int> fieldNumbers = PQ::fnumbers(qresult);
+    for (int i = 0; i < PQntuples(qresult->get()); i++)
+    {
+        std::string v = PQ::getvalue(qresult, i, fieldNumbers.at("cmd_class"));
+        return_value.push_back(v);
+    }
+
+    return return_value;
 }
 
 bool CmdQueueRunnerManager::queue_has_runner_already(const CmdQueue &cmd_queue)

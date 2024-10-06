@@ -34,6 +34,7 @@ void pg_cmdqd_usage(char* program_name, std::ostream &stream = std::cout)
         << "    \x1b[1m--log-times\x1b[22m | \x1b[1m--no-log-times\x1b[22m      Include the time in log messages (the default), or not." << std::endl
         << "    \x1b[1m--cmd-queue <cmd_class>\x1b[22m           Can be repeated for every queue you want to run." << std::endl
         << "    \x1b[1m--emit-sigusr1-when-ready\x1b[22m" << std::endl
+        << "    \x1b[1m--list-queue-names\x1b[22m                returns values you can give to --cmd-queue" << std::endl
         << std::endl
         << "\x1b[1m<connection_string>\x1b[22m" << std::endl
         << "    Can be in keyword/value or in URI format, as per the libpq documentation:" << std::endl
@@ -100,6 +101,8 @@ int main(int argc, char **argv)
     std::string conn_str;
     bool emit_sigusr1_when_ready = false;
 
+    bool list_mode = false;
+
     try
     {
         const char *log_level = std::getenv("PG_CMDQD_LOG_LEVEL");
@@ -159,6 +162,10 @@ int main(int argc, char **argv)
             {
                 emit_sigusr1_when_ready = true;
             }
+            else if (std::string(argv[i]) == "--list-queue-names")
+            {
+                list_mode = true;
+            }
             else if (std::string(argv[i]) == "--log-times")
             {
                 logger->logTimes = true;
@@ -187,6 +194,28 @@ int main(int argc, char **argv)
 
     CmdQueueRunnerManager *manager = CmdQueueRunnerManager::make_instance(
             conn_str, emit_sigusr1_when_ready, explicit_cmd_classes);
+
+    if (list_mode)
+    {
+        const std::vector<std::string> &queues = manager->get_cmd_class_names();
+
+        std::cout << std::endl;
+        for(const std::string &s : queues)
+        {
+            std::cout << s << std::endl;
+        }
+        std::cout << std::endl;
+
+        for(const std::string &s : queues)
+        {
+            std::cout << "--cmd-queue " << s << "  ";
+        }
+
+        std::cout << std::endl;
+        std::cout << std::endl;
+
+        return queues.empty() ? 66 : 0;
+    }
 
     manager->install_signal_handlers();
 

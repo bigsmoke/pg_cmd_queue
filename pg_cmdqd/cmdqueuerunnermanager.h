@@ -49,7 +49,8 @@ public:
     std::vector<std::string> cmd_classes();
     void receive_signal(const int sig_num);
     void install_signal_handlers();
-    void maintain_connection();
+    void maintain_connection(bool one_shot=false);
+    std::vector<std::string> get_cmd_class_names();
 };
 
 #endif // CMDQUEUERUNNERMANAGER_H

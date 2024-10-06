@@ -122,9 +122,13 @@ class CmdQueueRunner
 
                     queue_cmd.meta.stamp_start_time();
 
+                    logger->log(LOG_NOTICE, "Starting cmd_id = %s (%s)", queue_cmd.meta.cmd_id.c_str(), queue_cmd.meta.cmd_class_identity.c_str());
+
                     // Delegate the execution of the command to the specific `(Nix|Sql|Http)QueueCommand`.
                     // `conn` is passed to `run_cmd()` solely because `SqlQueueCommand` needs the connection.
                     queue_cmd.run_cmd(conn, _cmd_queue.queue_cmd_timeout_sec);
+
+                    logger->log(LOG_NOTICE, "Finished cmd_id = %s (%s)", queue_cmd.meta.cmd_id.c_str(), queue_cmd.meta.cmd_class_identity.c_str());
 
                     queue_cmd.meta.stamp_end_time();
 

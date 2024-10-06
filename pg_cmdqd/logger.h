@@ -90,6 +90,7 @@ public:
     LogLine(LogLine &&other) = default;
     LogLine &operator=(LogLine &&other) = default;
 
+    const std::string &get_line() const;
     const char *c_str() const;
     bool alsoLogToStdOut() const;
 };

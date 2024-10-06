@@ -41,6 +41,11 @@ LogLine::LogLine(std::string &&line, bool alsoToStdOut) :
 
 }
 
+const std::string &LogLine::get_line() const
+{
+    return line;
+}
+
 LogLine::LogLine(const char *s, size_t len, bool alsoToStdOut) :
     line(s, len),
     alsoToStdOut(alsoToStdOut)
@@ -212,26 +217,30 @@ void Logger::writeLog()
             lines.pop();
         }
 
-        if (this->file)
+        std::istringstream iss(line.get_line());
+        for(std::string real_line; std::getline(iss, real_line ); )
         {
-            if (fputs(line.c_str(), this->file) < 0 ||
-                fputs("\n", this->file) < 0 ||
-                fflush(this->file) != 0)
+            if (this->file)
             {
-                alsoLogToStd = true;
-                fputs("Writing to log failed. Enabling stdout logger.", stderr);
+                if (fputs(real_line.c_str(), this->file) < 0 ||
+                    fputs("\n", this->file) < 0 ||
+                    fflush(this->file) != 0)
+                {
+                    alsoLogToStd = true;
+                    fputs("Writing to log failed. Enabling stdout logger.", stderr);
+                }
             }
-        }
 
-        if (!this->file || line.alsoLogToStdOut())
-        {
-            FILE *output = stdout;
+            if (!this->file || line.alsoLogToStdOut())
+            {
+                FILE *output = stdout;
 #ifdef TESTING
-            output = stderr; // the stdout interfers with Qt test XML output, so using stderr.
+                output = stderr; // the stdout interfers with Qt test XML output, so using stderr.
 #endif
-            fputs(line.c_str(), output);
-            fputs("\n", output);
-            fflush(output);
+                fputs(real_line.c_str(), output);
+                fputs("\n", output);
+                fflush(output);
+            }
         }
     }
 }

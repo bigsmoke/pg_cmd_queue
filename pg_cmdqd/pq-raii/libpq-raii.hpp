@@ -277,7 +277,7 @@ namespace PQ
         std::vector<std::vector<char>> values;
         keys.reserve(keyword_values.size());
         values.reserve(keyword_values.size());
-        for (auto kv: keyword_values)
+        for (auto &kv: keyword_values)
         {
             keys.emplace_back(kv.first.begin(), kv.first.end());
             values.emplace_back(kv.second.begin(), kv.second.end());

@@ -11,7 +11,7 @@ CmdQueueRunnerManager::CmdQueueRunnerManager(
         const bool emit_sigusr1_when_ready,
         const std::vector<std::string> &explicit_cmd_classes)
     : _conn_str(conn_str),
-      _kill_pipe_fds(O_NONBLOCK),
+      _kill_pipe_fds(0),
       emit_sigusr1_when_ready(emit_sigusr1_when_ready),
       explicit_cmd_classes(explicit_cmd_classes)
 {
@@ -196,7 +196,18 @@ void CmdQueueRunnerManager::listen_for_queue_list_changes()
         {
             int sig_num = -1;
             // TODO: Replicate logic from CmdQueueRunner._run()
-            while (read(_kill_pipe_fds.read_fd(), &sig_num, sizeof(int)) > 0) {}
+            ssize_t n = 0;
+            ssize_t bytes_read = 0;
+            while ((n = read(_kill_pipe_fds.read_fd(), &sig_num, sizeof(int) - bytes_read)) != 0)
+            {
+                if (n < 0)
+                {
+                    if (errno == EINTR)
+                        continue;
+                    break;
+                }
+                bytes_read += n;
+            }
             logger->log(LOG_DEBUG1,
                         "Exiting `poll()` loop after receiving `kill(%i)` signal via pipe.",
                         sig_num);
@@ -286,17 +297,20 @@ void CmdQueueRunnerManager::receive_signal(const int sig_num)
         // Write signal number to the pipe, to bust the `poll()` loop in the runner thread out of its wait.
         // We stupidly write the binary representation of the `int`, knowing that the endianness at the other
         // end of the pipe is the same, since we're the same program.
-        size_t kill_pipe_bytes_written = 0;
-        size_t kill_pipe_bytes_to_write = sizeof(int);
-        size_t kill_pipe_ptr_offset = 0;
-        while ((kill_pipe_bytes_written = write(_kill_pipe_fds.write_fd(),
-                                                &sig_num + kill_pipe_ptr_offset,
-                                                kill_pipe_bytes_to_write)
-               ) > 0
-               or (kill_pipe_bytes_written < 0 and errno == SIGINT))
+        const ssize_t len = sizeof(int);
+        ssize_t i = 0;
+        while (i < len)
         {
-            kill_pipe_bytes_to_write -= kill_pipe_bytes_written;
-            kill_pipe_ptr_offset += kill_pipe_bytes_written;
+            const size_t n = write(_kill_pipe_fds.write_fd(), &sig_num + i, len - i);
+
+            if (n < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+                break;
+            }
+
+            i += n;
         }
     }
 }

@@ -12,7 +12,7 @@ PG_CMDQD_TARGETS := $(if $(or $(filter Debug,$(PG_CMDQD_BUILD_TYPE)),$\
                           $(PG_CMDQD_DEBUG_TARGET) $(PG_CMDQD_REGRESS_LAUNCHER))
 PG_CMDQD_TARGETS += $(if $(filter Release,$(PG_CMDQD_BUILD_TYPE)),$\
                           $(PG_CMDQD_RELEASE_TARGET))
-PG_CMDQ_DONT_BUILD ?=
+PG_CMDQD_DONT_BUILD ?=
 
 DISTVERSION = $(shell sed -n -E "/default_version/ s/^.*'(.*)'.*$$/\1/p" $(EXTENSION).control)
 
@@ -27,7 +27,7 @@ REGRESS_OPTS += --launcher=$(PG_CMDQD_REGRESS_LAUNCHER) --temp-instance=$(CURDIR
 # `pg_cmd_queue_daemon` is not a script, but when we call it a `PROGRAM_built`, PGXS wants to play with its
 # object files—a task which we want to leave up to the CMake (wrapped by a GNU Makefile) in the daemon's
 # subdirectory.
-ifeq ($(strip $(PG_CMDQ_DONT_BUILD)),)
+ifeq ($(strip $(PG_CMDQD_DONT_BUILD)),)
 SCRIPTS_built := $(PG_CMDQD_DEFAULT_TARGET)
 endif
 

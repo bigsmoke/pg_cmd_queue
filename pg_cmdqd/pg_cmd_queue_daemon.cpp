@@ -202,7 +202,7 @@ int main(int argc, char **argv)
         std::cout << std::endl;
         for(const std::string &s : queues)
         {
-            std::cout << s << std::endl;
+            std::cout << "--cmd-queue " << s << std::endl;
         }
         std::cout << std::endl;
 

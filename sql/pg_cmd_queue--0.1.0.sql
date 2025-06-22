@@ -489,6 +489,14 @@ create table cmd_queue (
         default '10 seconds'::interval
     ,queue_cmd_timeout interval
     /*
+    ,queue_update_retries_allowed int
+        not null
+        default 0
+    -- And/or:
+    ,queue_update_(retry_)function regprocedure
+        not null
+    */
+    /*
     ,queue_runner_range int4range
         not null
         default int4range(1, 2)

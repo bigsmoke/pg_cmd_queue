@@ -1236,7 +1236,6 @@ create table nix_queue_cmd_template (
         not null
         default ''::hstore
     ,cmd_stdin bytea
-        not null
         default ''::bytea
     ,cmd_exit_code int
     ,cmd_term_sig int
@@ -2576,6 +2575,17 @@ $out$, 'UTF8')
             ,0
             ,null
             ,E'A line, distinguishable from cmd-1''s line.\n'::bytea
+            ,E''::bytea
+        )
+        ,(
+            'cmd-with-null-stdin'
+            ,null
+            ,array['nixtestcmd', '--exit-code', '0']
+            ,''::hstore
+            ,null::bytea
+            ,0
+            ,null
+            ,E''::bytea
             ,E''::bytea
         );
     elsif test_stage$ = 'test' then

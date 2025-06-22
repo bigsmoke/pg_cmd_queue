@@ -3,3 +3,4 @@ NOTICE:  CREATE EXTENSION pg_cmd_queue WITH VERSION '0.1.0' CASCADE
 NOTICE:  installing required extension "hstore"
 NOTICE:  CALL cmdq.test__cmd_line()
 NOTICE:  CALL cmdq.test__pg_cmd_queue()
+NOTICE:  Running integration tests…

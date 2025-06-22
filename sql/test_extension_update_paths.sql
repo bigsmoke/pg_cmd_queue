@@ -117,8 +117,9 @@ begin
                 execute _test_proc;
             end loop;
 
-            -- TODO: Make this dynamictoo, but probably via a build step, because `EXECUTE`
+            -- TODO: Make this dynamic too, but probably via a build step, because `EXECUTE`
             --       doesn't let through transaction control commands
+            raise notice 'Running integration tests…';
             set client_min_messages to WARNING;
             -- \echo call cmdq.test_integration__pg_cmdqd('setup');
             call cmdq.test_integration__pg_cmdqd('setup');

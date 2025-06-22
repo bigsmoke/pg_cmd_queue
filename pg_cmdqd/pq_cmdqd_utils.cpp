@@ -17,7 +17,7 @@ void maintain_connection(const std::string &conn_str, std::shared_ptr<PG::conn> 
         if (not conn_str.empty())
             logger->log(LOG_INFO, "Connecting to database: \x1b[1m%s\x1b[22m", conn_str.c_str());
         else
-            logger->log(LOG_DEBUG1, "No connectiong string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[22m environment variables…");
+            logger->log(LOG_DEBUG1, "No connection string given; letting libpq figure out what to do from the \x1b[1mPG*\x1b[22m environment variables…");
 
         int connect_retry_seconds = 1;
         while (not sig_num_received({SIGQUIT, SIGTERM, SIGINT}))

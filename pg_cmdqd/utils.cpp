@@ -2,8 +2,11 @@
 
 #include <cstring>
 #include <cstdarg>
+#include <stdexcept>
+#include <iostream>
 
 #include <signal.h>
+#include <string.h>
 
 std::string formatString(const std::string str, ...)
 {
@@ -30,4 +33,19 @@ int maskAllSignalsCurrentThread()
 
     int r = pthread_sigmask(SIG_SETMASK, &set, NULL);
     return r;
+}
+
+std::unordered_map<std::string, std::string> environ_to_unordered_map(char **environ)
+{
+    std::unordered_map<std::string, std::string> map;
+
+    for (int i = 0; environ[i]; i++)
+    {
+        const char* equalSign = strchr(environ[i], '=');
+        if (equalSign == nullptr)
+            throw std::runtime_error("`**environ` member strings are each expected to have an equals sign.");
+        map[std::string(environ[i], equalSign - *&environ[i])] = std::string(equalSign+1);
+    }
+
+    return map;
 }

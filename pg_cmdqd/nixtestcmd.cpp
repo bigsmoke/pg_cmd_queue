@@ -18,6 +18,7 @@ nixtestcmd
         --stdout-line <content> |
         --echo-stdin |
         --echo-env-var <var_name> |
+        --echo-env-var-if-exists <var_name> |
         --sleep-ms <msec> |
         --ignore-sigterm |
         --ignore-sigint |
@@ -116,6 +117,15 @@ int main(int argc, char** argv)
                     exit(253);
                 }
                 std::cout << getenv(argv[i]) << std::endl;
+            }
+            else if (arg == "--echo-env-var-if-exists")
+            {
+                if (i == argc - 1)
+                    throw CmdLineParseError(std::string("Missing argument to: ") + argv[i]);
+                if (getenv(argv[++i]) != nullptr)
+                {
+                    std::cout << getenv(argv[i]) << std::endl;
+                }
             }
             else if (arg == "--sleep-ms")
             {

@@ -42,6 +42,9 @@ installcheck: $(PG_CMDQD_DEBUG_TARGET)
 installcheck: export PATH:=$(dir $(CURDIR)/$(PG_CMDQD_DEBUG_TARGET)):$(PATH)
 installcheck: export PG_CMDQD_BIN=$(CURDIR)/$(PG_CMDQD_DEBUG_TARGET)
 installcheck: export PG_CMDQD_LOG_FILE=$(CURDIR)/results/pg_cmdqd.log
+installcheck: export PG_CMDQD_ENV_TEST__EMPTY_VAR=
+installcheck: export PG_CMDQD_ENV_TEST__DIFFICULT_VAR=spaces and even an = sign
+installcheck: export PG_CMDQD_ENV_TEST__IGNORED=should not be passed
 installcheck: export EXTENSION_NAME=$(EXTENSION)
 installcheck: export EXTENSION_ENTRY_VERSIONS=$(patsubst sql/$(EXTENSION)--%.sql,%,$(wildcard sql/$(EXTENSION)--[0-99].[0-99].[0-99].sql))
 

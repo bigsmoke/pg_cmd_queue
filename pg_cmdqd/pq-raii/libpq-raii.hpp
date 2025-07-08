@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <regex>
 #include <string>
+#include <strings.h>
 #include <vector>
 
 #include <libpq-fe.h>
@@ -894,10 +895,10 @@ namespace PQ
     /**
      * Parse Postgres `hstore` string to an `unordered_map` of each item in the `hstore`.
      */
-    inline std::unordered_map<std::string, std::string>
+    inline std::unordered_map<std::string, std::optional<std::string>>
     from_text_hstore(const std::string &input)
     {
-        std::unordered_map<std::string, std::string> result;
+        std::unordered_map<std::string, std::optional<std::string>> result;
 
         bool in_quotes = false;
         std::string::size_type key_start, key_end, val_start, val_end;
@@ -928,7 +929,12 @@ namespace PQ
                     else if (val_end == 0)
                     {
                         val_end = i-1;
-                        result[input.substr(key_start, key_end-key_start+1)] = unescape_hstore_text(input.substr(val_start, val_end-val_start+1));
+                        const std::string raw_val = input.substr(val_start, val_end-val_start+1);
+                        result[input.substr(key_start, key_end-key_start+1)] = (
+                            strcasecmp(raw_val.c_str(), "NULL") != 0
+                            ? std::optional(unescape_hstore_text(raw_val))
+                            : std::nullopt
+                        );
                         key_start = key_end = val_start = val_end = 0;
                     }
                 }
@@ -940,6 +946,37 @@ namespace PQ
         }
 
         return result;
+    }
+
+    inline std::string
+    as_text_hstore(const std::unordered_map<std::string, std::optional<std::string>> &m)
+    {
+        std::string hstore_text = "";
+        int i = 0;
+        for (auto const& pair : m)
+        {
+            if (++i > 1)
+                hstore_text += ",";
+            hstore_text += double_quote(pair.first) + "=>"
+                        + (pair.second ? double_quote(*pair.second) : "NULL");
+        }
+
+        return hstore_text;
+    }
+
+    inline std::string
+    as_text_hstore(const std::unordered_map<std::string, std::string> &m)
+    {
+        std::string hstore_text = "";
+        int i = 0;
+        for (auto const& pair : m)
+        {
+            if (++i > 1)
+                hstore_text += ",";
+            hstore_text += double_quote(pair.first) + "=>" + double_quote(pair.second);
+        }
+
+        return hstore_text;
     }
 }
 

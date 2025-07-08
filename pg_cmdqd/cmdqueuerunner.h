@@ -23,6 +23,8 @@
 #include "sqlqueuecmd.h"
 #include "utils.h"
 
+extern char **environ;
+
 template <typename T>
 class CmdQueueRunner
 {
@@ -39,6 +41,8 @@ class CmdQueueRunner
 
         Logger::cmd_queue = std::make_shared<CmdQueue>(_cmd_queue); // FIXME: This makes a copy
 
+        const std::unordered_map<std::string, std::string> cmdqd_env = environ_to_unordered_map(environ);
+
         std::shared_ptr<PG::conn> conn = nullptr;
         struct pollfd poll_fds[2];
 
@@ -53,8 +57,8 @@ class CmdQueueRunner
                 //   1. `SET`s SQL-level settings for the queue, and
                 //   2. `PREPARE`s the statements we will use to `SELECT FROM` and `UPDATE` the cmd queue.
                 std::shared_ptr<PG::result> proc_result = PQ::execParams(
-                        conn, std::string("CALL cmdqd.runner_session_start($1::regclass)"),
-                        1, {}, {_cmd_queue.cmd_class_identity});
+                        conn, std::string("CALL cmdqd.runner_session_start($1::regclass, $2::hstore)"),
+                        2, {}, {_cmd_queue.cmd_class_identity, PQ::as_text_hstore(cmdqd_env)});
                 if (PQ::resultStatus(proc_result) != PGRES_COMMAND_OK)
                 {
                     logger->log(LOG_ERROR, "Failure during `runner_session_start()`: %s",

@@ -2,7 +2,6 @@
 #include <iostream>
 #include <optional>
 #include <string>
-#include <vector>
 
 #include <assert.h>
 #include <fcntl.h>

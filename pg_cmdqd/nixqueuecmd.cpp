@@ -108,7 +108,7 @@ NixQueueCmd::NixQueueCmd(
             throw std::domain_error("`cmd_env` should never be `NULL`.");
         }
         std::string raw_cmd_env = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_env"));
-        cmd_env = PQ::from_text_hstore(raw_cmd_env);
+        cmd_env = throw_if_missing_any_value(PQ::from_text_hstore(raw_cmd_env));
 
         // For `cmd_stdin`, we can ignore NULLness, because `PGgetvalue()` returns an empty string when the
         // field is `NULL`, which is what we'd want anyway.
@@ -288,6 +288,9 @@ void NixQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         char **c_argv = argv_heads.data();
         // We don't have to worry about cleaning up c_argv, because execvp() will clear up all that.
 
+        std::string path(getenv("PATH"));
+        clearenv();
+        setenv("PATH", path.c_str(), 1);
         for (const std::pair<const std::string, std::string> &var : this->cmd_env)
         {
             setenv(var.first.c_str(), var.second.c_str(), 1);

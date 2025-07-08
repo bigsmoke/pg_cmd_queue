@@ -1,8 +1,8 @@
 ---
 pg_extension_name: pg_cmd_queue
 pg_extension_version: 0.1.0
-pg_readme_generated_at: 2023-12-01 20:26:14.477871+00
-pg_readme_version: 0.6.5
+pg_readme_generated_at: 2025-07-09 00:43:24.408138+01
+pg_readme_version: 0.7.0
 ---
 
 # The `pg_cmd_queue` PostgreSQL extension
@@ -119,6 +119,10 @@ column names are _not_ allowed to start with `queue_` or `cmd_`.
 The nice thing about a view-based queue is that it will always be up-to-date,
 as long as the predicates the view definition are correct.
 
+A view-based queue will nead an `INSTEAD OF UPDATE` trigger function to process
+the update that the `pg_cmdqd` performs after successfully or unsuccessfully
+running a command from the queue.
+
 ### Table-based command queues
 
 To create a table-based queue is simple:
@@ -158,8 +162,184 @@ philosopy of `pg_cmd_queue`, because whether you actually consider a
 `cmd_exit_code = 12` a failure is up to you and your application logic, and
 the same goes for `cmd_sql_result_status = 'PGRES_FATAL_ERROR'`.  It's all up
 to you.  A `nix_queue_cmd__require_exit_success()` trigger function _is_
-provided for you for free, as is a `sql_queue_cmd__require_status_ok()`
-function.
+provided for you for free (as in beer and in speech), as is a
+`sql_queue_cmd__require_status_ok()` function.
+
+### Using `pg_cmdqd` environment variables in view-based command queues
+
+When `pg_cmdqd` a command queue runner—a `CmdQueueRunner` class
+instance—registers, it passes the full set of environment variables that
+`pg_cmdqd` was started with to the `cmdqd.runner_session_start()` procedure.
+These variables are then stored in the database for the duration of that
+session, and accessible through the [`cmdq.global_cmd_env()`] function.
+
+**NOTE** that it's usually a bad idea to undiscriminately pass the entire
+`hstore` of environment variables to the `cmd_env hstore`, even if only because
+then it's easy to loose track of which environment variables your commands
+actually need.  Rather, make use of Postgres its `splice(hstore, text[])`
+function to select only those you need.  Of course, you may also use a specific
+value and pass it, in, for example, the `cmd_argv` array.  Nor is there anything
+stopping you from using the [`cmdq.global_cmd_env()`] to construct an SQL
+queue command.
+
+**NOTE** also, to a lesser extend, that needing the `pg_cmdqd` environment to
+construct your commands is most likely a design smell.  But, hey, who is the
+extension author to judge?!
+
+Because these `pg_cmdqd` environment variables are only available within
+the runner sessions, the [`cmdq.global_cmd_env()`] function can only be used
+to access these variables in view-based command queues and not in table-based
+queues, because only in the case of views are the command properties calculated
+at query time rather than during insert time.
+
+This is a limitation by design.  Rowan found it conceptually confusing to
+store the environment outside of the session context for two reasons:
+
+1. In the future, we may want to be able to run multiple instances of the
+   daemon, from different hosts, with different environments.  If we would
+   globally register the environment, outside of the session context, which
+   daemon's environment should then take precedence?
+   ~
+   To make that work “correctly”, each daemon would have to, for example,
+   register using its own unique identifier and each queue then owned by
+   a specific identifier or whatnot.  This sounds complicated because it
+   is—_too_ complicated.
+2. What does it even mean to access the `pg_cmdqd` its environment when the
+   daemon isn't running.  Outside of the runner session's context, the DB
+   statements are simply not running in the context of the daemon.
+
+[`cmdq.global_cmd_env()`]: #function-global_cmd_env
+
+#### Workaround for using the `pg_cmdqd` environment in table-based queues
+
+If you have a table-based queue and you do want to add some of the `pg_cmdqd`
+environment to the queue's commands, simply wrap the table in a view, as so:
+
+```sql
+do $$
+begin
+    --<WET:pg_cmdqd-env-table--setup>
+    create table _cmdqd_env_test_cmd (
+        like tst_nix_cmd including all
+    );
+    create table _cmdqd_env_test_cmd__expected (
+        like tst_nix_cmd including all excluding constraints
+    );
+    create table _cmdqd_env_test_cmd__actual (
+        like tst_nix_cmd including all
+    );
+    insert into _cmdqd_env_test_cmd__expected (
+        cmd_id
+        ,cmd_argv
+        ,cmd_env
+        ,cmd_stdin
+        ,cmd_exit_code
+        ,cmd_term_sig
+        ,cmd_stdout
+        ,cmd_stderr
+    )
+    values (
+        'cmd_using_pg_cmdqd_env'
+        ,array[
+            'nixtestcmd'
+            ,'--echo-env-var', 'ENVVAR_1'
+            ,'--echo-env-var', 'PG_CMDQD_ENV_TEST__DIFFICULT_VAR'
+            ,'--echo-env-var', 'PG_CMDQD_ENV_TEST__EMPTY_VAR'
+            ,'--echo-env-var-if-exists', 'PG_CMDQD_ENV_TEST__IGNORED'
+            ,'--exit-code', '0'
+        ]
+        ,'ENVVAR_1=>VALUE'::hstore
+        ,''::bytea
+        ,0
+        ,null::int
+        ,e'VALUE\nspaces and even an = sign\n\n'::bytea
+        ,''::bytea
+    );
+    insert into _cmdqd_env_test_cmd (
+        cmd_id, cmd_argv, cmd_env, cmd_stdin
+    )
+    select
+        cmd_id, cmd_argv, cmd_env, cmd_stdin
+    from
+        _cmdqd_env_test_cmd__expected
+    ;
+    create trigger insert_elsewhere_before_update
+        before update
+        on _cmdqd_env_test_cmd
+        for each row
+        execute function queue_cmd__insert_elsewhere('cmdq._cmdqd_env_test_cmd__actual')
+    ;
+    create trigger delete_after_update
+        after update
+        on _cmdqd_env_test_cmd
+        for each row
+        execute function queue_cmd__delete_after_update()
+    ;
+
+    create view cmdqd_env_test_cmd
+    as
+    select
+        c.cmd_class
+        ,c.cmd_id
+        ,c.cmd_subid
+        ,c.cmd_queued_since
+        ,c.cmd_runtime
+        ,c.cmd_argv
+        ,c.cmd_env || slice(
+            global_cmd_env()
+            ,array['PG_CMDQD_ENV_TEST__EMPTY_VAR', 'PG_CMDQD_ENV_TEST__DIFFICULT_VAR']
+        ) as cmd_env
+        ,c.cmd_stdin
+        ,c.cmd_exit_code
+        ,c.cmd_term_sig
+        ,c.cmd_stdout
+        ,c.cmd_stderr
+    from
+        _cmdqd_env_test_cmd AS c
+    ;
+
+    insert into cmd_queue (
+        cmd_class
+        ,cmd_signature_class
+        ,queue_runner_role
+        ,queue_notify_channel
+        ,queue_reselect_interval
+        ,queue_cmd_timeout
+    )
+    values (
+        'cmdqd_env_test_cmd'
+        ,'nix_queue_cmd_template'
+        --,'cmdq_test_role'
+        ,null
+        ,null
+        ,'1 day'::interval
+        ,'2 second'::interval
+    );
+    --</WET:pg_cmdqd-env-table--setup>
+
+    --<WET:pg_cmdqd-env-table--test>
+    declare
+        _expect record;
+        _actual record;
+    begin
+        for _expect in select * from cmdq._cmdqd_env_test_cmd__expected loop
+            -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which
+            -- commands are moved to by the `UPDATE` triggers _on_ the actual command queue table.
+            call cmdq.assert_queue_cmd_run_result(
+                'cmdq._cmdqd_env_test_cmd__actual'
+                ,cmdq.nix_queue_cmd_template(_expect)
+            );
+        end loop;
+    end;
+    --</WET:pg_cmdqd-env-table--test>
+end;
+$$;
+```
+
+See the [`test_integration__pg_cmdqd()`] procedure for a fully functioning
+example of this scenario.
+
+[`test_integration__pg_cmdqd()`]: #procedure-test_integration__pg_cmdqd-text
 
 ### Security considerations
 
@@ -301,38 +481,39 @@ The `cmd_queue` table has 14 attributes:
 
 14. `cmd_queue.pg_extension_name` `text`
 
-#### Table: `queue_cmd_template`
+#### Table: `http_queue_cmd_template`
 
-The `queue_cmd_template` table has 5 attributes:
+The `http_queue_cmd_template` table has 12 attributes:
 
-1. `queue_cmd_template.cmd_class` `regclass`
-
-   - `NOT NULL`
-   - `FOREIGN KEY (cmd_class) REFERENCES cmd_queue(cmd_class) ON UPDATE CASCADE ON DELETE CASCADE`
-
-2. `queue_cmd_template.cmd_id` `text`
-
-   Uniquely identifies an individual command in the queue (unless if `cmd_subid` is also required).
-
-   When a single key in the underlying object of a queue command is sufficient to
-   identify it, a `::text` representation of the key should go into this column.
-   If multiple keys are needed—for example, when the underlying object has a
-   multi-column primary key or when each underlying object can simultaneously
-   appear in multiple commands the queue—you will want to use `cmd_subid` in
-   addition to `cmd_id`.
+1. `http_queue_cmd_template.cmd_class` `regclass`
 
    - `NOT NULL`
 
-3. `queue_cmd_template.cmd_subid` `text`
-
-   Helps `cmd_id` to uniquely identify commands in the queue, when just a `cmd_id` is not enough.
-
-4. `queue_cmd_template.cmd_queued_since` `timestamp with time zone`
+2. `http_queue_cmd_template.cmd_id` `text`
 
    - `NOT NULL`
-   - `DEFAULT now()`
 
-5. `queue_cmd_template.cmd_runtime` `tstzrange`
+3. `http_queue_cmd_template.cmd_subid` `text`
+
+4. `http_queue_cmd_template.cmd_queued_since` `timestamp with time zone`
+
+   - `NOT NULL`
+
+5. `http_queue_cmd_template.cmd_runtime` `tstzrange`
+
+6. `http_queue_cmd_template.cmd_http_url` `text`
+
+7. `http_queue_cmd_template.cmd_http_version` `text`
+
+8. `http_queue_cmd_template.cmd_http_method` `text`
+
+9. `http_queue_cmd_template.cmd_http_request_headers` `hstore`
+
+10. `http_queue_cmd_template.cmd_http_request_body` `bytea`
+
+11. `http_queue_cmd_template.cmd_http_response_headers` `hstore`
+
+12. `http_queue_cmd_template.cmd_http_response_body` `bytea`
 
 #### Table: `nix_queue_cmd_template`
 
@@ -378,7 +559,6 @@ The `nix_queue_cmd_template` table has 12 attributes:
 
 8. `nix_queue_cmd_template.cmd_stdin` `bytea`
 
-   - `NOT NULL`
    - `DEFAULT '\x'::bytea`
 
 9. `nix_queue_cmd_template.cmd_exit_code` `integer`
@@ -399,6 +579,39 @@ The `nix_queue_cmd_template` table has 12 attributes:
 11. `nix_queue_cmd_template.cmd_stdout` `bytea`
 
 12. `nix_queue_cmd_template.cmd_stderr` `bytea`
+
+#### Table: `queue_cmd_template`
+
+The `queue_cmd_template` table has 5 attributes:
+
+1. `queue_cmd_template.cmd_class` `regclass`
+
+   - `NOT NULL`
+   - `FOREIGN KEY (cmd_class) REFERENCES cmd_queue(cmd_class) ON UPDATE CASCADE ON DELETE CASCADE`
+
+2. `queue_cmd_template.cmd_id` `text`
+
+   Uniquely identifies an individual command in the queue (unless if `cmd_subid` is also required).
+
+   When a single key in the underlying object of a queue command is sufficient to
+   identify it, a `::text` representation of the key should go into this column.
+   If multiple keys are needed—for example, when the underlying object has a
+   multi-column primary key or when each underlying object can simultaneously
+   appear in multiple commands the queue—you will want to use `cmd_subid` in
+   addition to `cmd_id`.
+
+   - `NOT NULL`
+
+3. `queue_cmd_template.cmd_subid` `text`
+
+   Helps `cmd_id` to uniquely identify commands in the queue, when just a `cmd_id` is not enough.
+
+4. `queue_cmd_template.cmd_queued_since` `timestamp with time zone`
+
+   - `NOT NULL`
+   - `DEFAULT now()`
+
+5. `queue_cmd_template.cmd_runtime` `tstzrange`
 
 #### Table: `sql_queue_cmd_template`
 
@@ -449,50 +662,25 @@ The `sql_queue_cmd_template` table has 10 attributes:
    When `cmd_sql` produced no rows, `cmd_sql` will contain either an SQL `NULL` or
    JSON `'null'` value.
 
-#### Table: `http_queue_cmd_template`
-
-The `http_queue_cmd_template` table has 12 attributes:
-
-1. `http_queue_cmd_template.cmd_class` `regclass`
-
-   - `NOT NULL`
-
-2. `http_queue_cmd_template.cmd_id` `text`
-
-   - `NOT NULL`
-
-3. `http_queue_cmd_template.cmd_subid` `text`
-
-4. `http_queue_cmd_template.cmd_queued_since` `timestamp with time zone`
-
-   - `NOT NULL`
-
-5. `http_queue_cmd_template.cmd_runtime` `tstzrange`
-
-6. `http_queue_cmd_template.cmd_http_url` `text`
-
-7. `http_queue_cmd_template.cmd_http_version` `text`
-
-8. `http_queue_cmd_template.cmd_http_method` `text`
-
-9. `http_queue_cmd_template.cmd_http_request_headers` `hstore`
-
-10. `http_queue_cmd_template.cmd_http_request_body` `bytea`
-
-11. `http_queue_cmd_template.cmd_http_response_headers` `hstore`
-
-12. `http_queue_cmd_template.cmd_http_response_body` `bytea`
-
 ### Views
 
 #### View: `cmdqd.cmd_queue`
 
 ```sql
- SELECT q.cmd_class, q.cmd_signature_class, q.queue_runner_role,
-    q.queue_notify_channel, q.queue_reselect_interval,
-    q.queue_reselect_randomized_every_nth, q.queue_select_timeout,
-    q.queue_cmd_timeout, q.queue_metadata_updated_at
+ SELECT q.cmd_class,
+    (quote_ident(pg_namespace.nspname::text) || '.'::text) || quote_ident(pg_class.relname::text) AS cmd_class_identity,
+    pg_class.relname AS cmd_class_relname, q.cmd_signature_class,
+    (parse_ident(q.cmd_signature_class::text))[array_upper(parse_ident(q.cmd_signature_class::text), 1)] AS cmd_signature_class_relname,
+    q.queue_runner_role, q.queue_notify_channel,
+    EXTRACT(epoch FROM q.queue_reselect_interval)::double precision * (10::double precision ^ 3::double precision) AS queue_reselect_interval_msec,
+    q.queue_reselect_randomized_every_nth,
+    EXTRACT(epoch FROM q.queue_select_timeout) AS queue_select_timeout_sec,
+    EXTRACT(epoch FROM q.queue_cmd_timeout) AS queue_cmd_timeout_sec,
+    q.queue_metadata_updated_at, color.ansi_fg
    FROM cmd_queue q
+     JOIN pg_class ON pg_class.oid = q.cmd_class::oid
+     JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+     CROSS JOIN LATERAL cmd_class_color(q.cmd_class) color(r, g, b, hex, ansi_fg, ansi_bg)
   WHERE q.queue_is_enabled;
 ```
 
@@ -541,7 +729,7 @@ Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `cmd_line (text[], hstore, bytea)`
 
@@ -583,19 +771,38 @@ Procedure arguments:
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
 |   `$1` |       `IN` |                                                                   | `cmdqd.cmd_queue`                                                    |  |
 
-#### Procedure: `cmdqd.runner_session_start (cmdqd.cmd_queue)`
+#### Procedure: `cmdqd.remember_failed_update_for_this_reselect_round (text, text)`
 
 Procedure arguments:
 
 | Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
 | ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
-|   `$1` |       `IN` |                                                                   | `cmdqd.cmd_queue`                                                    |  |
+|   `$1` |       `IN` | `cmd_id$`                                                         | `text`                                                               |  |
+|   `$2` |       `IN` | `cmd_subid$`                                                      | `text`                                                               | `NULL::text` |
+
+#### Procedure: `cmdqd.runner_session_start (cmdqd.cmd_queue, hstore)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | ``                                                                | `cmdqd.cmd_queue`                                                    |  |
+|   `$2` |       `IN` | `pg_cmdqd_env$`                                                   | `hstore`                                                             | `''::hstore` |
 
 Procedure-local settings:
 
-  *  `SET search_path TO pg_catalog`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
-#### Function: `cmdqd.select_cmd_from_queue_stmt (cmdqd.cmd_queue, text, text)`
+#### Procedure: `cmdqd.runner_session_start (regclass, hstore)`
+
+Procedure arguments:
+
+| Arg. # | Arg. mode  | Argument name                                                     | Argument type                                                        | Default expression  |
+| ------ | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------- |
+|   `$1` |       `IN` | ``                                                                | `regclass`                                                           |  |
+|   `$2` |       `IN` | `pg_cmdqd_env$`                                                   | `hstore`                                                             | `''::hstore` |
+
+#### Function: `cmdqd.select_cmd_from_queue_stmt (cmdqd.cmd_queue, text, text, boolean)`
 
 Function arguments:
 
@@ -604,6 +811,7 @@ Function arguments:
 |   `$1` |       `IN` | `cmd_queue$`                                                      | `cmdqd.cmd_queue`                                                    |  |
 |   `$2` |       `IN` | `where_condition$`                                                | `text`                                                               |  |
 |   `$3` |       `IN` | `order_by_expression$`                                            | `text`                                                               |  |
+|   `$4` |       `IN` | `exclude_already_updated_in_this_reselect_round$`                 | `boolean`                                                            | `true` |
 
 Function return type: `text`
 
@@ -627,7 +835,7 @@ Function return type: `trigger`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `cmd_queue__notify_daemon_of_changes()`
 
@@ -635,7 +843,7 @@ Function return type: `trigger`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `cmd_queue__queue_signature_constraint()`
 
@@ -643,7 +851,7 @@ Function return type: `trigger`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `cmd_queue__update_updated_at()`
 
@@ -651,7 +859,17 @@ Function return type: `trigger`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
+
+#### Function: `global_cmd_env()`
+
+Function return type: `hstore`
+
+Function attributes: `STABLE`, `LEAKPROOF`, `PARALLEL SAFE`
+
+Function-local settings:
+
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `nix_queue_cmd__require_exit_success()`
 
@@ -664,7 +882,7 @@ Function return type: `trigger`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `nix_queue_cmd_template (record)`
 
@@ -680,7 +898,7 @@ Function attributes: `IMMUTABLE`, `LEAKPROOF`, `PARALLEL SAFE`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `pg_cmd_queue_meta_pgxn()`
 
@@ -698,7 +916,7 @@ Function attributes: `STABLE`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `pg_cmd_queue_notify_channel()`
 
@@ -714,7 +932,7 @@ Function return type: `text`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
   *  `SET pg_readme.include_view_definitions TO true`
   *  `SET pg_readme.include_routine_definitions_like TO {test__%}`
 
@@ -808,7 +1026,7 @@ Function return type: `trigger`
 
 Function-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `queue_cmd_template__no_insert()`
 
@@ -838,7 +1056,7 @@ Procedure arguments:
 
 Procedure-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
 
 #### Function: `sql_queue_cmd__require_status_ok()`
 
@@ -848,13 +1066,13 @@ Function return type: `trigger`
 
 Procedure-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
   *  `SET plpgsql.check_asserts TO true`
 
 ```sql
 CREATE OR REPLACE PROCEDURE cmdq.test__cmd_line()
  LANGUAGE plpgsql
- SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET search_path TO 'cmdq', 'ext', 'pg_temp'
  SET "plpgsql.check_asserts" TO 'true'
 AS $procedure$
 declare
@@ -957,13 +1175,13 @@ Procedure arguments:
 
 Procedure-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
   *  `SET plpgsql.check_asserts TO true`
 
 ```sql
 CREATE OR REPLACE PROCEDURE cmdq.test_dump_restore__pg_cmd_queue(IN "test_stage$" text)
  LANGUAGE plpgsql
- SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET search_path TO 'cmdq', 'ext', 'pg_temp'
  SET "plpgsql.check_asserts" TO 'true'
 AS $procedure$
 begin
@@ -1111,13 +1329,13 @@ Procedure arguments:
 
 Procedure-local settings:
 
-  *  `SET search_path TO cmdq, public, pg_temp`
+  *  `SET search_path TO cmdq, ext, pg_temp`
   *  `SET plpgsql.check_asserts TO true`
 
 ```sql
 CREATE OR REPLACE PROCEDURE cmdq.test__pg_cmd_queue()
  LANGUAGE plpgsql
- SET search_path TO 'cmdq', 'public', 'pg_temp'
+ SET search_path TO 'cmdq', 'ext', 'pg_temp'
  SET "plpgsql.check_asserts" TO 'true'
 AS $procedure$
 declare

@@ -20,6 +20,7 @@ how to run each queue.
 
 `pg_cmd_queue` does _not_ come with any preconfigured queues.
 
+
 ## Design philosophy and architecture
 
 `pg_cmd_queue` tries very hard to _not_ impose any additional semantics on top
@@ -73,6 +74,7 @@ This is all considered application-specific logic, about which `pg_cmd_queue`
 has no opinion, though it does offer some helpful, readymade trigger functions
 and the likes.
 
+
 ## Installing `pg_cmd_queue`
 
 The `pg_cmd_queue` `Makefile` uses PostgreSQL's build infrastructure for
@@ -92,6 +94,7 @@ make install
 
 This requires write access to `pg_config --sharedir`.  On most systems this
 means that you will have to become `root` first or run `sudo make install`.
+
 
 ## Setting up `pg_cmd_queue`
 
@@ -114,10 +117,16 @@ columns of your own, _after_ the columns that are specified by the
 `_<cmd_type>_queue_cmd_template` that you choose to use.  Note that your custom
 column names are _not_ allowed to start with `queue_` or `cmd_`.
 
+
 ### View-based command queues
 
 The nice thing about a view-based queue is that it will always be up-to-date,
 as long as the predicates the view definition are correct.
+
+A view-based queue will nead an `INSTEAD OF UPDATE` trigger function to process
+the update that the `pg_cmdqd` performs after successfully or unsuccessfully
+running a command from the queue.
+
 
 ### Table-based command queues
 
@@ -158,8 +167,187 @@ philosopy of `pg_cmd_queue`, because whether you actually consider a
 `cmd_exit_code = 12` a failure is up to you and your application logic, and
 the same goes for `cmd_sql_result_status = 'PGRES_FATAL_ERROR'`.  It's all up
 to you.  A `nix_queue_cmd__require_exit_success()` trigger function _is_
-provided for you for free, as is a `sql_queue_cmd__require_status_ok()`
-function.
+provided for you for free (as in beer and in speech), as is a
+`sql_queue_cmd__require_status_ok()` function.
+
+
+### Using `pg_cmdqd` environment variables in view-based command queues
+
+When `pg_cmdqd` a command queue runner—a `CmdQueueRunner` class
+instance—registers, it passes the full set of environment variables that
+`pg_cmdqd` was started with to the `cmdqd.runner_session_start()` procedure.
+These variables are then stored in the database for the duration of that
+session, and accessible through the [`cmdq.global_cmd_env()`] function.
+
+**NOTE** that it's usually a bad idea to undiscriminately pass the entire
+`hstore` of environment variables to the `cmd_env hstore`, even if only because
+then it's easy to loose track of which environment variables your commands
+actually need.  Rather, make use of Postgres its `splice(hstore, text[])`
+function to select only those you need.  Of course, you may also use a specific
+value and pass it, in, for example, the `cmd_argv` array.  Nor is there anything
+stopping you from using the [`cmdq.global_cmd_env()`] to construct an SQL
+queue command.
+
+**NOTE** also, to a lesser extend, that needing the `pg_cmdqd` environment to
+construct your commands is most likely a design smell.  But, hey, who is the
+extension author to judge?!
+
+Because these `pg_cmdqd` environment variables are only available within
+the runner sessions, the [`cmdq.global_cmd_env()`] function can only be used
+to access these variables in view-based command queues and not in table-based
+queues, because only in the case of views are the command properties calculated
+at query time rather than during insert time.
+
+This is a limitation by design.  Rowan found it conceptually confusing to
+store the environment outside of the session context for two reasons:
+
+1. In the future, we may want to be able to run multiple instances of the
+   daemon, from different hosts, with different environments.  If we would
+   globally register the environment, outside of the session context, which
+   daemon's environment should then take precedence?
+   ~
+   To make that work “correctly”, each daemon would have to, for example,
+   register using its own unique identifier and each queue then owned by
+   a specific identifier or whatnot.  This sounds complicated because it
+   is—_too_ complicated.
+2. What does it even mean to access the `pg_cmdqd` its environment when the
+   daemon isn't running.  Outside of the runner session's context, the DB
+   statements are simply not running in the context of the daemon.
+
+[`cmdq.global_cmd_env()`]: #function-global_cmd_env
+
+
+#### Workaround for using the `pg_cmdqd` environment in table-based queues
+
+If you have a table-based queue and you do want to add some of the `pg_cmdqd`
+environment to the queue's commands, simply wrap the table in a view, as so:
+
+```sql
+do $$
+begin
+    --<WET:pg_cmdqd-env-table--setup>
+    create table _cmdqd_env_test_cmd (
+        like tst_nix_cmd including all
+    );
+    create table _cmdqd_env_test_cmd__expected (
+        like tst_nix_cmd including all excluding constraints
+    );
+    create table _cmdqd_env_test_cmd__actual (
+        like tst_nix_cmd including all
+    );
+    insert into _cmdqd_env_test_cmd__expected (
+        cmd_id
+        ,cmd_argv
+        ,cmd_env
+        ,cmd_stdin
+        ,cmd_exit_code
+        ,cmd_term_sig
+        ,cmd_stdout
+        ,cmd_stderr
+    )
+    values (
+        'cmd_using_pg_cmdqd_env'
+        ,array[
+            'nixtestcmd'
+            ,'--echo-env-var', 'ENVVAR_1'
+            ,'--echo-env-var', 'PG_CMDQD_ENV_TEST__DIFFICULT_VAR'
+            ,'--echo-env-var', 'PG_CMDQD_ENV_TEST__EMPTY_VAR'
+            ,'--echo-env-var-if-exists', 'PG_CMDQD_ENV_TEST__IGNORED'
+            ,'--exit-code', '0'
+        ]
+        ,'ENVVAR_1=>VALUE'::hstore
+        ,''::bytea
+        ,0
+        ,null::int
+        ,e'VALUE\nspaces and even an = sign\n\n'::bytea
+        ,''::bytea
+    );
+    insert into _cmdqd_env_test_cmd (
+        cmd_id, cmd_argv, cmd_env, cmd_stdin
+    )
+    select
+        cmd_id, cmd_argv, cmd_env, cmd_stdin
+    from
+        _cmdqd_env_test_cmd__expected
+    ;
+    create trigger insert_elsewhere_before_update
+        before update
+        on _cmdqd_env_test_cmd
+        for each row
+        execute function queue_cmd__insert_elsewhere('cmdq._cmdqd_env_test_cmd__actual')
+    ;
+    create trigger delete_after_update
+        after update
+        on _cmdqd_env_test_cmd
+        for each row
+        execute function queue_cmd__delete_after_update()
+    ;
+
+    create view cmdqd_env_test_cmd
+    as
+    select
+        c.cmd_class
+        ,c.cmd_id
+        ,c.cmd_subid
+        ,c.cmd_queued_since
+        ,c.cmd_runtime
+        ,c.cmd_argv
+        ,c.cmd_env || slice(
+            global_cmd_env()
+            ,array['PG_CMDQD_ENV_TEST__EMPTY_VAR', 'PG_CMDQD_ENV_TEST__DIFFICULT_VAR']
+        ) as cmd_env
+        ,c.cmd_stdin
+        ,c.cmd_exit_code
+        ,c.cmd_term_sig
+        ,c.cmd_stdout
+        ,c.cmd_stderr
+    from
+        _cmdqd_env_test_cmd AS c
+    ;
+
+    insert into cmd_queue (
+        cmd_class
+        ,cmd_signature_class
+        ,queue_runner_role
+        ,queue_notify_channel
+        ,queue_reselect_interval
+        ,queue_cmd_timeout
+    )
+    values (
+        'cmdqd_env_test_cmd'
+        ,'nix_queue_cmd_template'
+        --,'cmdq_test_role'
+        ,null
+        ,null
+        ,'1 day'::interval
+        ,'2 second'::interval
+    );
+    --</WET:pg_cmdqd-env-table--setup>
+
+    --<WET:pg_cmdqd-env-table--test>
+    declare
+        _expect record;
+        _actual record;
+    begin
+        for _expect in select * from cmdq._cmdqd_env_test_cmd__expected loop
+            -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which
+            -- commands are moved to by the `UPDATE` triggers _on_ the actual command queue table.
+            call cmdq.assert_queue_cmd_run_result(
+                'cmdq._cmdqd_env_test_cmd__actual'
+                ,cmdq.nix_queue_cmd_template(_expect)
+            );
+        end loop;
+    end;
+    --</WET:pg_cmdqd-env-table--test>
+end;
+$$;
+```
+
+See the [`test_integration__pg_cmdqd()`] procedure for a fully functioning
+example of this scenario.
+
+[`test_integration__pg_cmdqd()`]: #procedure-test_integration__pg_cmdqd-text
+
 
 ### Security considerations
 
@@ -271,7 +459,7 @@ create function pg_cmd_queue_readme()
 declare
     _readme text;
 begin
-    create extension if not exists pg_readme;
+    create extension if not exists pg_readme with schema cmdq;
 
     _readme := pg_extension_readme('pg_cmd_queue'::name);
 
@@ -885,6 +1073,33 @@ begin atomic
         distinct_color as rgb
     ;
 end;
+
+--------------------------------------------------------------------------------------------------------------
+
+create function global_cmd_env()
+    returns hstore
+    stable
+    leakproof
+    parallel safe
+    set search_path from current
+    language plpgsql
+    as $$
+declare
+    _cmd_env hstore = ''::hstore;
+begin
+    if to_regprocedure('pg_temp.pg_cmdqd_env()') is not null then
+        -- The temporary function exists.
+        _cmd_env := pg_temp.pg_cmdqd_env();
+    end if;
+
+    if to_regprocedure('cmdq.mock_env()') is not null then
+        -- A function with mock vars exists.
+        _cmd_env := _cmd_env || cmdq.mock_env();
+    end if;
+
+    return _cmd_env;
+end
+$$;
 
 --------------------------------------------------------------------------------------------------------------
 -- `queue_cmd_template` table template and related objects                                                  --
@@ -1665,7 +1880,7 @@ when ($1).cmd_signature_class = 'cmdq.http_queue_cmd_template'::regclass then '
     ,cmd_http_request_headers hstore
     ,cmd_http_request_body bytea' end || '
 FROM
-    ' || ($1).cmd_class::text || ' AS q
+    ' || (pg_identify_object('pg_class'::regclass, ($1).cmd_class, 0)).identity || ' AS q
 WHERE
     ' || concat_ws('AND '
             ,case when exclude_already_updated_in_this_reselect_round$ then 'NOT EXISTS (
@@ -1714,7 +1929,7 @@ create function cmdqd.update_cmd_in_queue_stmt(cmdqd.cmd_queue)
     return
 'WITH updated_cmd_cte AS (
     UPDATE
-        ' || ($1).cmd_class::text || '
+        ' || (pg_identify_object('pg_class'::regclass, ($1).cmd_class, 0)).identity || '
     SET
         cmd_runtime = tstzrange(to_timestamp($3), to_timestamp($4))' || case
 when ($1).cmd_signature_class = 'cmdq.sql_queue_cmd_template'::regclass then '
@@ -1761,8 +1976,8 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create procedure cmdqd.runner_session_start(cmdqd.cmd_queue)
-    set search_path to pg_catalog
+create procedure cmdqd.runner_session_start(cmdqd.cmd_queue, "pg_cmdqd_env$" hstore = ''::hstore)
+    set search_path from current
     language plpgsql
     as $$
 begin
@@ -1778,6 +1993,16 @@ begin
             not null
         ,cmd_subid text
         ,unique nulls not distinct (cmd_id, cmd_subid)
+    );
+
+    EXECUTE format('
+        CREATE FUNCTION pg_temp.pg_cmdqd_env()
+            RETURNS HSTORE
+            IMMUTABLE
+            LEAKPROOF
+            PARALLEL SAFE
+            RETURN %L::hstore'
+        ,"pg_cmdqd_env$"
     );
 
     call cmdqd.prepare_to_select_cmd_from_queue($1);
@@ -1803,13 +2028,13 @@ $$;
 
 --------------------------------------------------------------------------------------------------------------
 
-create procedure cmdqd.runner_session_start(regclass)
+create procedure cmdqd.runner_session_start(regclass, "pg_cmdqd_env$" hstore = ''::hstore)
     language plpgsql
     as $$
 declare
     _q cmdqd.cmd_queue := (select row(q.*)::cmdqd.cmd_queue from cmdqd.cmd_queue as q where q.cmd_class = $1);
 begin
-    call cmdqd.runner_session_start(_q);
+    call cmdqd.runner_session_start(_q, "pg_cmdqd_env$");
 end;
 $$;
 
@@ -2384,8 +2609,6 @@ create procedure test_integration__pg_cmdqd(test_stage$ text)
     language plpgsql
     as $$
 declare
-    _expect record;
-    _actual record;
     _valid_test_stages constant text[] := array['configure', 'setup', 'test', 'teardown'];
 begin
     -- Because this procedure executes transaction control statements, we cannot attach these as `SET`
@@ -2596,6 +2819,106 @@ $out$, 'UTF8')
             ,E''::bytea
             ,E''::bytea
         );
+
+        --<WET:pg_cmdqd-env-table--setup>
+        create table _cmdqd_env_test_cmd (
+            like tst_nix_cmd including all
+        );
+        create table _cmdqd_env_test_cmd__expected (
+            like tst_nix_cmd including all excluding constraints
+        );
+        create table _cmdqd_env_test_cmd__actual (
+            like tst_nix_cmd including all
+        );
+        insert into _cmdqd_env_test_cmd__expected (
+            cmd_id
+            ,cmd_argv
+            ,cmd_env
+            ,cmd_stdin
+            ,cmd_exit_code
+            ,cmd_term_sig
+            ,cmd_stdout
+            ,cmd_stderr
+        )
+        values (
+            'cmd_using_pg_cmdqd_env'
+            ,array[
+                'nixtestcmd'
+                ,'--echo-env-var', 'ENVVAR_1'
+                ,'--echo-env-var', 'PG_CMDQD_ENV_TEST__DIFFICULT_VAR'
+                ,'--echo-env-var', 'PG_CMDQD_ENV_TEST__EMPTY_VAR'
+                ,'--echo-env-var-if-exists', 'PG_CMDQD_ENV_TEST__IGNORED'
+                ,'--exit-code', '0'
+            ]
+            ,'ENVVAR_1=>VALUE'::hstore
+            ,''::bytea
+            ,0
+            ,null::int
+            ,e'VALUE\nspaces and even an = sign\n\n'::bytea
+            ,''::bytea
+        );
+        insert into _cmdqd_env_test_cmd (
+            cmd_id, cmd_argv, cmd_env, cmd_stdin
+        )
+        select
+            cmd_id, cmd_argv, cmd_env, cmd_stdin
+        from
+            _cmdqd_env_test_cmd__expected
+        ;
+        create trigger insert_elsewhere_before_update
+            before update
+            on _cmdqd_env_test_cmd
+            for each row
+            execute function queue_cmd__insert_elsewhere('cmdq._cmdqd_env_test_cmd__actual')
+        ;
+        create trigger delete_after_update
+            after update
+            on _cmdqd_env_test_cmd
+            for each row
+            execute function queue_cmd__delete_after_update()
+        ;
+
+        create view cmdqd_env_test_cmd
+        as
+        select
+            c.cmd_class
+            ,c.cmd_id
+            ,c.cmd_subid
+            ,c.cmd_queued_since
+            ,c.cmd_runtime
+            ,c.cmd_argv
+            ,c.cmd_env || slice(
+                global_cmd_env()
+                ,array['PG_CMDQD_ENV_TEST__EMPTY_VAR', 'PG_CMDQD_ENV_TEST__DIFFICULT_VAR']
+            ) as cmd_env
+            ,c.cmd_stdin
+            ,c.cmd_exit_code
+            ,c.cmd_term_sig
+            ,c.cmd_stdout
+            ,c.cmd_stderr
+        from
+            _cmdqd_env_test_cmd AS c
+        ;
+
+        insert into cmd_queue (
+            cmd_class
+            ,cmd_signature_class
+            ,queue_runner_role
+            ,queue_notify_channel
+            ,queue_reselect_interval
+            ,queue_cmd_timeout
+        )
+        values (
+            'cmdqd_env_test_cmd'
+            ,'nix_queue_cmd_template'
+            --,'cmdq_test_role'
+            ,null
+            ,null
+            ,'1 day'::interval
+            ,'2 second'::interval
+        );
+        --</WET:pg_cmdqd-env-table--setup>
+
     elsif test_stage$ = 'test' then
         <<insert_in_queue_before_registering_queue>>
         declare
@@ -2672,20 +2995,43 @@ $out$, 'UTF8')
             ;
         end check_if_pre_inserted_commands_are_run;
 
-        <<single_cmd>>
-        for _expect in select * from cmdq.tst_nix_cmd__expect loop
-            insert into cmdq.tst_nix_cmd
-                (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin)
-            values
-                (_expect.cmd_id, _expect.cmd_subid, _expect.cmd_argv, _expect.cmd_env, _expect.cmd_stdin)
-            ;
+        declare
+            _expect record;
+            _actual record;
+        begin
+            for _expect in select * from cmdq.tst_nix_cmd__expect loop
+                insert into cmdq.tst_nix_cmd
+                    (cmd_id, cmd_subid, cmd_argv, cmd_env, cmd_stdin)
+                values
+                    (_expect.cmd_id, _expect.cmd_subid, _expect.cmd_argv, _expect.cmd_env, _expect.cmd_stdin)
+                ;
 
-            commit and chain;  -- Because otherwise, our changes will be invisible to the daemon.
+                commit and chain;  -- Because otherwise, our changes will be invisible to the daemon.
 
-            -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which commands are
-            -- moved to by the `UPDATE` triggers _on_ the actual command queue table.
-            call cmdq.assert_queue_cmd_run_result('cmdq.tst_nix_cmd__actual', cmdq.nix_queue_cmd_template(_expect));
-        end loop single_cmd;
+                -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which
+                -- commands are moved to by the `UPDATE` triggers _on_ the actual command queue table.
+                call cmdq.assert_queue_cmd_run_result(
+                    'cmdq.tst_nix_cmd__actual'
+                    ,cmdq.nix_queue_cmd_template(_expect)
+                );
+            end loop;
+        end;
+
+        --<WET:pg_cmdqd-env-table--test>
+        declare
+            _expect record;
+            _actual record;
+        begin
+            for _expect in select * from cmdq._cmdqd_env_test_cmd__expected loop
+                -- `tst_nix_cmd__actual` is not the actual command queue table; it is the table to which
+                -- commands are moved to by the `UPDATE` triggers _on_ the actual command queue table.
+                call cmdq.assert_queue_cmd_run_result(
+                    'cmdq._cmdqd_env_test_cmd__actual'
+                    ,cmdq.nix_queue_cmd_template(_expect)
+                );
+            end loop;
+        end;
+        --</WET:pg_cmdqd-env-table--test>
 
     elsif test_stage$ = 'teardown' then
         delete from cmd_queue where cmd_class = 'cmdq.tst_nix_cmd'::regclass;
@@ -2693,6 +3039,7 @@ $out$, 'UTF8')
         drop table tst_nix_cmd cascade;
         drop table tst_nix_cmd__actual cascade;
         drop table tst_nix_cmd__expect cascade;
+        drop table _cmdqd_env_test_cmd cascade;
     end if;
 end;
 $$;

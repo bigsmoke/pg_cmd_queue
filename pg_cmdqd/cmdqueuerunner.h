@@ -57,7 +57,7 @@ class CmdQueueRunner
                 //   1. `SET`s SQL-level settings for the queue, and
                 //   2. `PREPARE`s the statements we will use to `SELECT FROM` and `UPDATE` the cmd queue.
                 std::shared_ptr<PG::result> proc_result = PQ::execParams(
-                        conn, std::string("CALL cmdqd.runner_session_start($1::regclass, $2::hstore)"),
+                        conn, std::string("CALL cmdqd.runner_session_start($1::regclass, $2)"),
                         2, {}, {_cmd_queue.cmd_class_identity, PQ::as_text_hstore(cmdqd_env)});
                 if (PQ::resultStatus(proc_result) != PGRES_COMMAND_OK)
                 {

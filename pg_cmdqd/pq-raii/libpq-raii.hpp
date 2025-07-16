@@ -50,11 +50,11 @@ namespace PG
         conn &operator=(const conn &other) = delete;
         conn &operator=(conn &&other) = delete;
 
-        inline conn(PGconn *raw_conn_ptr)
-            : raw_conn_ptr(raw_conn_ptr)
+        conn(PGconn *raw_conn_ptr) :
+            raw_conn_ptr(raw_conn_ptr)
         {}
 
-        inline ~conn()
+        ~conn()
         {
             if (!raw_conn_ptr)
                 return;
@@ -63,12 +63,12 @@ namespace PG
             raw_conn_ptr = nullptr;
         }
 
-        inline PGconn *get() const
+        PGconn *get() const
         {
             return this->raw_conn_ptr;
         }
 
-        inline void finish()
+        void finish()
         {
             PQfinish(raw_conn_ptr);
             raw_conn_ptr = nullptr;
@@ -97,11 +97,11 @@ namespace PG
             return *this;
         }
 
-        inline result(PGresult *res)
+        result(PGresult *res)
             : res(res)
         {}
 
-        inline ~result()
+        ~result()
         {
             if (!this->res)
                 return;
@@ -110,13 +110,13 @@ namespace PG
             this->res = nullptr;
         }
 
-        inline PGresult *get() const
+        PGresult *get() const
         {
             return this->res;
         }
 
         /*
-        inline void status_or_throw(const ExecStatusType &expectedStatus)
+        void status_or_throw(const ExecStatusType &expectedStatus)
         {
             if (PQresultStatus(this->res))
         }
@@ -125,42 +125,42 @@ namespace PG
 
     class notify
     {
-        PGnotify *_d = nullptr;
+        PGnotify *d = nullptr;
 
     public:
         notify(const notify &other) = delete;
 
-        notify(PGnotify *raw_notify_ptr)
-            : _d(raw_notify_ptr)
+        notify(PGnotify *raw_notify_ptr) :
+            d(raw_notify_ptr)
         {}
 
         ~notify()
         {
-            if (!this->_d)
+            if (!this->d)
                 return;
 
-            PQfreemem(this->_d);
-            this->_d = nullptr;
+            PQfreemem(this->d);
+            this->d = nullptr;
         }
 
         PGnotify *get()
         {
-            return this->_d;
+            return this->d;
         }
 
         std::string relname() const
         {
-            return std::string(this->_d->relname);
+            return std::string(this->d->relname);
         }
 
         int be_pid() const
         {
-            return this->_d->be_pid;
+            return this->d->be_pid;
         }
 
         std::string extra() const
         {
-            return std::string(this->_d->extra);
+            return std::string(this->d->extra);
         }
     };
 
@@ -191,16 +191,16 @@ namespace PG
         /**
          * \brief basically the constructor for the end iterator.
          */
-        inline tuple_iterator(int rowCount):
+        tuple_iterator(int rowCount) :
             rowCount(rowCount)
         {}
 
-        inline tuple_iterator(
+        tuple_iterator(
                 std::shared_ptr<PG::result> &result,
                 std::shared_ptr<PG::conn> &conn,
                 int rowCount,
-                int fieldCount)
-        :   result(result),
+                int fieldCount) :
+            result(result),
             conn(conn),
             rowCount(rowCount),
             fieldCount(fieldCount)
@@ -213,18 +213,18 @@ namespace PG
             }
         }
 
-        inline bool operator!=(tuple_iterator &rhs)
+        bool operator!=(tuple_iterator &rhs)
         {
             return this->row != rhs.row;
         }
 
-        inline tuple_iterator &operator++(int)
+        tuple_iterator &operator++(int)
         {
             row++;
             return *this;
         }
 
-        inline tuple_iterator &operator++()
+        tuple_iterator &operator++()
         {
             return operator++(0);
         }
@@ -254,17 +254,17 @@ namespace PG
         int rowCount = 0;
 
     public:
-        inline tuples<T>(PG::tuple_iterator<T> &begin, int rowCount) :
+        tuples<T>(PG::tuple_iterator<T> &begin, int rowCount) :
             _begin(begin),
             rowCount(rowCount)
         {}
 
-        inline tuple_iterator<T> begin()
+        tuple_iterator<T> begin()
         {
             return _begin;
         }
 
-        inline tuple_iterator<T> end()
+        tuple_iterator<T> end()
         {
             return PG::tuple_iterator<T>(this->rowCount);
         }
@@ -309,7 +309,7 @@ namespace PQ
                 (const char * const *)keys.data(),
                 (const char * const *)values.data(),
                 expand_dbnname
-                ));
+            ));
     }
 
     inline void reset(std::shared_ptr<PG::conn> &conn)

@@ -46,6 +46,9 @@ namespace PG
 
     public:
         conn(const conn &other) = delete;
+        conn(conn &&other) = delete;
+        conn &operator=(const conn &other) = delete;
+        conn &operator=(conn &&other) = delete;
 
         inline conn(PGconn *raw_conn_ptr)
             : raw_conn_ptr(raw_conn_ptr)
@@ -57,9 +60,10 @@ namespace PG
                 return;
 
             PQfinish(raw_conn_ptr);
+            raw_conn_ptr = nullptr;
         }
 
-        inline PGconn *get()
+        inline PGconn *get() const
         {
             return this->raw_conn_ptr;
         }
@@ -77,6 +81,21 @@ namespace PG
 
     public:
         result(const result &other) = delete;
+        result &operator=(const result &other) = delete;
+
+        result(result &&other)
+            : res(other.res)
+        {
+            other.res = nullptr;
+        }
+
+        result &operator=(result &&other)
+        {
+            res = other.res;
+            other.res = nullptr;
+
+            return *this;
+        }
 
         inline result(PGresult *res)
             : res(res)
@@ -88,9 +107,10 @@ namespace PG
                 return;
 
             PQclear(this->res);
+            this->res = nullptr;
         }
 
-        inline PGresult *get()
+        inline PGresult *get() const
         {
             return this->res;
         }
@@ -105,41 +125,42 @@ namespace PG
 
     class notify
     {
-        PGnotify *_raw_notify_ptr = nullptr;
+        PGnotify *_d = nullptr;
 
     public:
         notify(const notify &other) = delete;
 
         notify(PGnotify *raw_notify_ptr)
-            : _raw_notify_ptr(raw_notify_ptr)
+            : _d(raw_notify_ptr)
         {}
 
         ~notify()
         {
-            if (!this->_raw_notify_ptr)
+            if (!this->_d)
                 return;
 
-            PQfreemem(this->_raw_notify_ptr);
+            PQfreemem(this->_d);
+            this->_d = nullptr;
         }
 
         PGnotify *get()
         {
-            return this->_raw_notify_ptr;
+            return this->_d;
         }
 
         std::string relname() const
         {
-            return std::string(this->_raw_notify_ptr->relname);
+            return std::string(this->_d->relname);
         }
 
         int be_pid() const
         {
-            return this->_raw_notify_ptr->be_pid;
+            return this->_d->be_pid;
         }
 
         std::string extra() const
         {
-            return std::string(this->_raw_notify_ptr->extra);
+            return std::string(this->_d->extra);
         }
     };
 
@@ -318,16 +339,16 @@ namespace PQ
         return PQsocket(conn->get());
     }
 
-    inline std::shared_ptr<PG::result>
+    inline PG::result
     exec(
             const std::shared_ptr<PG::conn> &conn,
             const std::string &command
         )
     {
-        return std::make_shared<PG::result>(PQexec(conn->get(), command.c_str()));
+        return PG::result(PQexec(conn->get(), command.c_str()));
     }
 
-    inline std::shared_ptr<PG::result>
+    inline PG::result
     execParams(
             const std::shared_ptr<PG::conn> &conn,
             const std::string &command,
@@ -343,7 +364,7 @@ namespace PQ
         for (const std::optional<std::string> &paramValue : paramValues)
             rawValues.push_back(paramValue ? const_cast<char*>(paramValue.value().c_str()) : nullptr);
 
-        return std::make_shared<PG::result>(PQexecParams(
+        return PG::result(PQexecParams(
                 conn->get(),
                 command.c_str(),
                 nParams,
@@ -370,7 +391,7 @@ namespace PQ
                 paramTypes ? paramTypes.value().data() : nullptr));
     }
 
-    inline std::shared_ptr<PG::result>
+    inline PG::result
     execPrepared(
             const std::shared_ptr<PG::conn> &conn,
             const std::string &stmtName,
@@ -385,7 +406,7 @@ namespace PQ
         for (const std::optional<std::string> &paramValue : paramValues)
             rawValues.push_back(paramValue ? const_cast<char*>(paramValue.value().c_str()) : nullptr);
 
-        return std::make_shared<PG::result>(PQexecPrepared(
+        return PG::result(PQexecPrepared(
                 conn->get(),
                 stmtName.c_str(),
                 nParams,
@@ -396,24 +417,24 @@ namespace PQ
                 ));
     }
 
-    inline std::shared_ptr<PG::result>
+    inline PG::result
     describePrepared(
             const std::shared_ptr<PG::conn> &conn,
             const std::string &stmtName)
     {
-        return std::make_shared<PG::result>(PQdescribePrepared(conn->get(), stmtName.c_str()));
+        return PG::result(PQdescribePrepared(conn->get(), stmtName.c_str()));
     }
 
     inline ExecStatusType
-    resultStatus(const std::shared_ptr<PG::result> &res)
+    resultStatus(const PG::result &res)
     {
-        return PQresultStatus(res->get());
+        return PQresultStatus(res.get());
     }
 
     inline std::string
-    resultErrorMessage(const std::shared_ptr<PG::result> &res)
+    resultErrorMessage(const PG::result &res)
     {
-        return std::string(PQresultErrorMessage(res->get()));
+        return std::string(PQresultErrorMessage(res.get()));
     }
 
     /**
@@ -441,44 +462,44 @@ namespace PQ
      * [`postgres_ext.h`](https://github.com/postgres/postgres/blob/master/src/include/postgres_ext.h).
      */
     inline std::map<char, std::optional<std::string>>
-    resultErrorFields(const std::shared_ptr<PG::result> &res)
+    resultErrorFields(const PG::result &res)
     {
         return std::map<char, std::optional<std::string>>({
-            {PG_DIAG_SEVERITY, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SEVERITY))},
-            {PG_DIAG_SEVERITY_NONLOCALIZED, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SEVERITY_NONLOCALIZED))},
-            {PG_DIAG_SQLSTATE, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SQLSTATE))},
-            {PG_DIAG_MESSAGE_PRIMARY, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_MESSAGE_PRIMARY))},
-            {PG_DIAG_MESSAGE_DETAIL, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_MESSAGE_DETAIL))},
-            {PG_DIAG_MESSAGE_HINT, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_MESSAGE_HINT))},
-            {PG_DIAG_STATEMENT_POSITION, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_STATEMENT_POSITION))},
-            {PG_DIAG_INTERNAL_POSITION, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_INTERNAL_POSITION))},
-            {PG_DIAG_INTERNAL_QUERY, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_INTERNAL_QUERY))},
-            {PG_DIAG_CONTEXT, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_CONTEXT))},
-            {PG_DIAG_SCHEMA_NAME, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SCHEMA_NAME))},
-            {PG_DIAG_TABLE_NAME, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_TABLE_NAME))},
-            {PG_DIAG_COLUMN_NAME, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_COLUMN_NAME))},
-            {PG_DIAG_DATATYPE_NAME, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_DATATYPE_NAME))},
-            {PG_DIAG_CONSTRAINT_NAME, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_CONSTRAINT_NAME))},
-            {PG_DIAG_SOURCE_FILE, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SOURCE_FILE))},
-            {PG_DIAG_SOURCE_LINE, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SOURCE_LINE))},
-            {PG_DIAG_SOURCE_FUNCTION, PQ::from_text(PQresultErrorField(res->get(), PG_DIAG_SOURCE_FUNCTION))},
+            {PG_DIAG_SEVERITY, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SEVERITY))},
+            {PG_DIAG_SEVERITY_NONLOCALIZED, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SEVERITY_NONLOCALIZED))},
+            {PG_DIAG_SQLSTATE, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SQLSTATE))},
+            {PG_DIAG_MESSAGE_PRIMARY, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_MESSAGE_PRIMARY))},
+            {PG_DIAG_MESSAGE_DETAIL, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_MESSAGE_DETAIL))},
+            {PG_DIAG_MESSAGE_HINT, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_MESSAGE_HINT))},
+            {PG_DIAG_STATEMENT_POSITION, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_STATEMENT_POSITION))},
+            {PG_DIAG_INTERNAL_POSITION, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_INTERNAL_POSITION))},
+            {PG_DIAG_INTERNAL_QUERY, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_INTERNAL_QUERY))},
+            {PG_DIAG_CONTEXT, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_CONTEXT))},
+            {PG_DIAG_SCHEMA_NAME, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SCHEMA_NAME))},
+            {PG_DIAG_TABLE_NAME, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_TABLE_NAME))},
+            {PG_DIAG_COLUMN_NAME, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_COLUMN_NAME))},
+            {PG_DIAG_DATATYPE_NAME, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_DATATYPE_NAME))},
+            {PG_DIAG_CONSTRAINT_NAME, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_CONSTRAINT_NAME))},
+            {PG_DIAG_SOURCE_FILE, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SOURCE_FILE))},
+            {PG_DIAG_SOURCE_LINE, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SOURCE_LINE))},
+            {PG_DIAG_SOURCE_FUNCTION, PQ::from_text(PQresultErrorField(res.get(), PG_DIAG_SOURCE_FUNCTION))},
         });
     }
 
     inline int
-    ntuples(const std::shared_ptr<PG::result> &res)
+    ntuples(const PG::result &res)
     {
-        return PQntuples(res->get());
+        return PQntuples(res.get());
     }
 
     inline std::vector<std::string>
-    fnames(const std::shared_ptr<PG::result> &res)
+    fnames(const PG::result &res)
     {
         std::vector<std::string> names;
-        names.reserve(PQnfields(res->get()));
-        int nfields = PQnfields(res->get());
+        names.reserve(PQnfields(res.get()));
+        int nfields = PQnfields(res.get());
         for (int i = 0; i < nfields; i++)
-            names.push_back(PQfname(res->get(), i));
+            names.push_back(PQfname(res.get(), i));
         return names;
     }
 
@@ -487,14 +508,14 @@ namespace PQ
      * `PQfnumber()` function that does exist.
      */
     inline std::unordered_map<std::string, int>
-    fnumbers(const std::shared_ptr<PG::result> &res)
+    fnumbers(const PG::result &res)
     {
-        int fieldCount = PQnfields(res->get());
+        int fieldCount = PQnfields(res.get());
         std::unordered_map<std::string, int> map;
         map.reserve(fieldCount);
         for (int i = 0; i < fieldCount; i++)
         {
-            std::string value = PQfname(res->get(), i);
+            std::string value = PQfname(res.get(), i);
             map[value] = i;
         }
         return map;
@@ -532,36 +553,36 @@ namespace PQ
     }
 
     inline std::string
-    getvalue(const std::shared_ptr<PG::result> &res, int row_number, int column_number)
+    getvalue(const PG::result &res, int row_number, int column_number)
     {
-        return std::string(PQgetvalue(res->get(), row_number, column_number));
+        return std::string(PQgetvalue(res.get(), row_number, column_number));
     }
 
     inline std::string
-    getvalue(const std::shared_ptr<PG::result> &res, int row_number, const std::string &column_name)
+    getvalue(const PG::result &res, int row_number, const std::string &column_name)
     {
-        int column_number = PQfnumber(res->get(), column_name.c_str());
+        int column_number = PQfnumber(res.get(), column_name.c_str());
         return getvalue(res, row_number, column_number);
     }
 
     inline bool
-    getisnull(const std::shared_ptr<PG::result> &res, int row_number, int column_number)
+    getisnull(const PG::result &res, int row_number, int column_number)
     {
-        return PQgetisnull(res->get(), row_number, column_number) == 1;
+        return PQgetisnull(res.get(), row_number, column_number) == 1;
     }
 
     inline std::optional<std::string>
-    getnullable(const std::shared_ptr<PG::result> &res, int row_number, int column_number)
+    getnullable(const PG::result &res, int row_number, int column_number)
     {
-        if (PQgetisnull(res->get(), row_number, column_number) == 1)
+        if (PQgetisnull(res.get(), row_number, column_number) == 1)
             return {};
-        return std::string(PQgetvalue(res->get(), row_number, column_number));
+        return std::string(PQgetvalue(res.get(), row_number, column_number));
     }
 
     inline std::optional<std::string>
-    getnullable(const std::shared_ptr<PG::result> &res, int row_number, const std::string &column_name)
+    getnullable(const PG::result &res, int row_number, const std::string &column_name)
     {
-        int column_number = PQfnumber(res->get(), column_name.c_str());
+        int column_number = PQfnumber(res.get(), column_name.c_str());
         return getnullable(res, row_number, column_number);
     }
 

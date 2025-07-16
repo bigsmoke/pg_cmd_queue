@@ -31,7 +31,7 @@ const std::string CmdQueue::SELECT_STMT = R"SQL(
  * @param row_number
  * @param field_numbers
  */
-CmdQueue::CmdQueue(std::shared_ptr<PG::result> &result,
+CmdQueue::CmdQueue(const PG::result &result,
                    int row_number,
                    const std::unordered_map<std::string, int> &field_numbers
                   ) noexcept
@@ -85,7 +85,7 @@ CmdQueue::CmdQueue(std::shared_ptr<PG::result> &result,
         else
             this->queue_cmd_timeout_sec = 0;
 
-        ansi_fg = PQgetvalue(result->get(), row_number, field_numbers.at("ansi_fg"));
+        ansi_fg = PQgetvalue(result.get(), row_number, field_numbers.at("ansi_fg"));
 
         _is_valid = true;
     }

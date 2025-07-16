@@ -88,7 +88,7 @@ std::vector<int> NixQueueCmd::update_param_formats() const
 }
 
 NixQueueCmd::NixQueueCmd(
-        std::shared_ptr<PG::result> &result,
+        const PG::result &result,
         int row_number,
         const std::unordered_map<std::string, int> &field_numbers
     ) noexcept
@@ -96,23 +96,23 @@ NixQueueCmd::NixQueueCmd(
 {
     try
     {
-        if (PQgetisnull(result->get(), row_number, field_numbers.at("cmd_argv")))
+        if (PQgetisnull(result.get(), row_number, field_numbers.at("cmd_argv")))
         {
             throw std::domain_error("`cmd_argv` should never be `NULL`.");
         }
-        std::string raw_cmd_argv = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_argv"));
+        std::string raw_cmd_argv = PQgetvalue(result.get(), row_number, field_numbers.at("cmd_argv"));
         cmd_argv = PQ::from_text_array(raw_cmd_argv);
 
-        if (PQgetisnull(result->get(), row_number, field_numbers.at("cmd_env")))
+        if (PQgetisnull(result.get(), row_number, field_numbers.at("cmd_env")))
         {
             throw std::domain_error("`cmd_env` should never be `NULL`.");
         }
-        std::string raw_cmd_env = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_env"));
+        std::string raw_cmd_env = PQgetvalue(result.get(), row_number, field_numbers.at("cmd_env"));
         cmd_env = throw_if_missing_any_value(PQ::from_text_hstore(raw_cmd_env));
 
         // For `cmd_stdin`, we can ignore NULLness, because `PGgetvalue()` returns an empty string when the
         // field is `NULL`, which is what we'd want anyway.
-        cmd_stdin = PQgetvalue(result->get(), row_number, field_numbers.at("cmd_stdin"));
+        cmd_stdin = PQgetvalue(result.get(), row_number, field_numbers.at("cmd_stdin"));
 
         _is_valid = true;
     }

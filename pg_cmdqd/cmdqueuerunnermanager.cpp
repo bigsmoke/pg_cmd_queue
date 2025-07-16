@@ -49,16 +49,16 @@ std::vector<std::string> CmdQueueRunnerManager::get_cmd_class_names()
     std::vector<std::string> return_value;
 
     // TODO: Rowan's API pattern is that we get this info from schema cmdqd, but the view there is filtered.
-    std::shared_ptr<PG::result> qresult = PQ::exec(_conn, "SELECT cmd_class FROM cmdq.cmd_queue");
+    PG::result qresult = PQ::exec(_conn, "SELECT cmd_class FROM cmdq.cmd_queue");
 
-    if (!qresult)
+    if (PQ::ntuples(qresult) == 0)
         throw std::runtime_error("No result");
 
     if (PQ::resultStatus(qresult) != PGRES_TUPLES_OK)
         throw std::runtime_error(PQ::resultErrorMessage(qresult));
 
     std::unordered_map<std::string, int> fieldNumbers = PQ::fnumbers(qresult);
-    for (int i = 0; i < PQntuples(qresult->get()); i++)
+    for (int i = 0; i < PQntuples(qresult.get()); i++)
     {
         std::string v = PQ::getvalue(qresult, i, fieldNumbers.at("cmd_class"));
         return_value.push_back(v);
@@ -78,7 +78,7 @@ void CmdQueueRunnerManager::refresh_queue_list(const bool retry_select)
 {
     static const int max_retry_seconds = 60;
 
-    std::shared_ptr<PG::result> result;
+    PG::result result(nullptr);
     int retry_seconds = 1;
     while (_keep_running)
     {
@@ -103,7 +103,7 @@ void CmdQueueRunnerManager::refresh_queue_list(const bool retry_select)
 
     _new_cmd_classes.clear();
     std::unordered_map<std::string, int> fieldNumbers = PQ::fnumbers(result);
-    for (int i = 0; i < PQntuples(result->get()); i++)
+    for (int i = 0; i < PQntuples(result.get()); i++)
     {
         CmdQueue cmd_queue(result, i, fieldNumbers);
 
@@ -132,8 +132,8 @@ void CmdQueueRunnerManager::refresh_queue_list(const bool retry_select)
 
 void CmdQueueRunnerManager::listen_for_queue_list_changes()
 {
-    std::shared_ptr<PG::result> listen_result = PQ::exec(_conn, "LISTEN cmdq");  // TODO: Get from setting wrapper
-    if (PQresultStatus(listen_result->get()) != PGRES_COMMAND_OK)
+    PG::result listen_result = PQ::exec(_conn, "LISTEN cmdq");  // TODO: Get from setting wrapper
+    if (PQresultStatus(listen_result.get()) != PGRES_COMMAND_OK)
     {
         logger->log(LOG_ERROR, "Failed to `LISTEN` for `NOTIFY` events on the `cmdq` channel: %s",
                     PQerrorMessage(_conn->get()));

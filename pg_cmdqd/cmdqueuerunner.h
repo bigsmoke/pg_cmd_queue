@@ -56,7 +56,7 @@ class CmdQueueRunner
                 // The `cmdqd.runner_session_start()` function:
                 //   1. `SET`s SQL-level settings for the queue, and
                 //   2. `PREPARE`s the statements we will use to `SELECT FROM` and `UPDATE` the cmd queue.
-                std::shared_ptr<PG::result> proc_result = PQ::execParams(
+                PG::result proc_result = PQ::execParams(
                         conn, std::string("CALL cmdqd.runner_session_start($1::regclass, $2)"),
                         2, {}, {_cmd_queue.cmd_class_identity, PQ::as_text_hstore(cmdqd_env)});
                 if (PQ::resultStatus(proc_result) != PGRES_COMMAND_OK)
@@ -73,7 +73,7 @@ class CmdQueueRunner
             if (selected_field_numbers.size() == 0)
             {
                 // The field mappings are the same for all the `SELECT` statements of the same `T`.
-                std::shared_ptr<PG::result> result = PQ::describePrepared(conn, "select_oldest_cmd");
+                PG::result result = PQ::describePrepared(conn, "select_oldest_cmd");
                 selected_field_numbers = PQ::fnumbers(result);
             }
 
@@ -89,7 +89,7 @@ class CmdQueueRunner
 
                 PQ::exec(conn, "BEGIN TRANSACTION");
 
-                std::shared_ptr<PG::result> select_result;
+                PG::result select_result(nullptr);
 
                 if (notify_cmd)
                 {
@@ -120,7 +120,7 @@ class CmdQueueRunner
                     logger->log(LOG_ERROR, "Retrieving command from queue failed: %s",
                                 PQerrorMessage(conn->get()));
                 }
-                else if (PQntuples(select_result->get()) == 1)
+                else if (PQntuples(select_result.get()) == 1)
                 {
                     T queue_cmd(select_result, 0, selected_field_numbers);
 
@@ -136,7 +136,7 @@ class CmdQueueRunner
 
                     queue_cmd.meta.stamp_end_time();
 
-                    std::shared_ptr<PG::result> update_result = PQ::execPrepared(
+                    PG::result update_result = PQ::execPrepared(
                             conn, "update_cmd", queue_cmd.update_params().size(),
                             queue_cmd.update_params(), queue_cmd.update_param_lengths(),
                             queue_cmd.update_param_formats());
@@ -147,7 +147,7 @@ class CmdQueueRunner
 
                         PQ::exec(conn, "ROLLBACK TRANSACTION");
 
-                        std::shared_ptr<PG::result> log_failed_update_result = PQ::execParams(
+                        PG::result log_failed_update_result = PQ::execParams(
                                 conn, "CALL cmdqd.remember_failed_update_for_this_reselect_round($1, $2)",
                                 2, {}, {queue_cmd.meta.cmd_id, queue_cmd.meta.cmd_subid});
                         if (PQ::resultStatus(log_failed_update_result) != PGRES_COMMAND_OK)
@@ -159,7 +159,7 @@ class CmdQueueRunner
                 }
                 else
                 {
-                    assert(PQntuples(select_result->get()) == 0);
+                    assert(PQ::ntuples(select_result) == 0);
 
                     if (not notify_cmd)
                     {
@@ -171,8 +171,8 @@ class CmdQueueRunner
                         // to a `NOTIFY` event.
                         reselect_next_when = std::chrono::steady_clock::now() + std::chrono::milliseconds(_cmd_queue.queue_reselect_interval_msec);
 
-                        std::shared_ptr<PG::result> proc_result = PQ::exec(
-                                conn, std::string("SELECT reselect_round FROM cmdqd.enter_reselect_round()"));
+                        PG::result proc_result(PQ::exec(
+                                conn, std::string("SELECT reselect_round FROM cmdqd.enter_reselect_round()")));
                         if (PQ::resultStatus(proc_result) != PGRES_TUPLES_OK)
                         {
                             logger->log(LOG_ERROR, "Failure during `enter_reselect_round()`: %s",

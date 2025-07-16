@@ -3,10 +3,10 @@
 #include <chrono>
 
 #include "pq-raii/libpq-raii.hpp"
-#include "utils.h"
+
 
 QueueCmdMetadata::QueueCmdMetadata(
-        std::shared_ptr<PG::result> &result,
+        const PG::result &result,
         int row_number,
         const std::unordered_map<std::string, int> &field_numbers
     ) noexcept

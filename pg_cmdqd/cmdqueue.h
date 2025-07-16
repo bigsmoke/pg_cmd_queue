@@ -45,7 +45,7 @@ public:
     std::string ansi_fg;
 
     CmdQueue() = default;
-    CmdQueue(std::shared_ptr<PG::result> &result, int row_number, const std::unordered_map<std::string, int> &field_numbers) noexcept;
+    CmdQueue(const PG::result &result, int row_number, const std::unordered_map<std::string, int> &field_numbers) noexcept;
     bool is_valid() const;
     std::string validation_error_message() const;
 };

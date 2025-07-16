@@ -57,7 +57,7 @@ std::vector<int> SqlQueueCmd::update_param_formats() const
 }
 
 SqlQueueCmd::SqlQueueCmd(
-        std::shared_ptr<PG::result> &result,
+        const PG::result &result,
         int row,
         const std::unordered_map<std::string, int> &fieldMapping) noexcept
     : meta(result, row, fieldMapping)
@@ -92,19 +92,19 @@ void SqlQueueCmd::receive_notice_c_wrapper(void *arg, const PGresult *res)
 
 void SqlQueueCmd::receive_notice(const PGresult *res)
 {
-    std::shared_ptr<PG::result> res_raii = std::make_shared<PG::result>((PGresult *)res);
+    PG::result res_raii((PGresult*)res);
     std::map<char, std::optional<std::string>> nonfatal_error = PQ::resultErrorFields(res_raii);
     cmd_sql_nonfatal_errors.emplace_back(nonfatal_error);
 }
 
 std::optional<std::map<char, std::optional<std::string>>>
-SqlQueueCmd::handle_sql_fatality(std::shared_ptr<PG::result> &result)
+SqlQueueCmd::handle_sql_fatality(const PG::result &result)
 {
     logger->log(
         LOG_ERROR, "cmd_id = '%s'%s: %s",
         meta.cmd_id.c_str(),
         meta.cmd_subid ? std::string(" (cmd_subid = '" + meta.cmd_subid.value() + "')").c_str() : "",
-        PQresultErrorMessage(result->get())
+        PQresultErrorMessage(result.get())
     );
 
     return PQ::resultErrorFields(result);
@@ -131,7 +131,7 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
     {
         // Set a savepoint so that, when the command errors, we don't have to rollback the whole
         // transaction (and lose the lock on the selected row).
-        std::shared_ptr<PG::result> result = PQ::exec(conn, "SAVEPOINT pre_run_cmd");
+        PG::result result = PQ::exec(conn, "SAVEPOINT pre_run_cmd");
         if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
         {
             _sql_bookkeeping_has_failed = true;
@@ -142,7 +142,7 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
 
     if (not _sql_bookkeeping_has_failed)
     {
-        std::shared_ptr<PG::result> result = PQ::exec(conn, cmd_sql.c_str());
+        PG::result result = PQ::exec(conn, cmd_sql.c_str());
         ExecStatusType exec_status = PQ::resultStatus(result);
         cmd_sql_result_status = PQresStatus(exec_status);
         if (exec_status == PGRES_TUPLES_OK)
@@ -160,7 +160,7 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
     // If no error occured yet, let's see what happens when we fire off all the constraints.
     if (not cmd_sql_fatal_error)
     {
-        std::shared_ptr<PG::result> result = PQ::exec(conn, "SET CONSTRAINTS ALL IMMEDIATE");
+        PG::result result = PQ::exec(conn, "SET CONSTRAINTS ALL IMMEDIATE");
         if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
         {
             _sql_cmd_itself_has_failed = true;
@@ -173,7 +173,7 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
     {
         if (_sql_cmd_itself_has_failed)
         {
-            std::shared_ptr<PG::result> result = PQ::exec(conn, "ROLLBACK TO SAVEPOINT pre_run_cmd");
+            PG::result result = PQ::exec(conn, "ROLLBACK TO SAVEPOINT pre_run_cmd");
             if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
             {
                 _sql_bookkeeping_has_failed = true;
@@ -182,7 +182,7 @@ void SqlQueueCmd::run_cmd(std::shared_ptr<PG::conn> &conn, const double queue_cm
         }
         else
         {
-            std::shared_ptr<PG::result> result = PQ::exec(conn, "RELEASE SAVEPOINT pre_run_cmd");
+            PG::result result = PQ::exec(conn, "RELEASE SAVEPOINT pre_run_cmd");
             if (PQ::resultStatus(result) != PGRES_COMMAND_OK)
             {
                 _sql_bookkeeping_has_failed = true;

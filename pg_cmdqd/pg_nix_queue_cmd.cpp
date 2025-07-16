@@ -118,6 +118,9 @@ int main(const int argc, const char *argv[])
     if (output_update_statement)
         std::cout << nix_queue_cmd.update_stmt(conn);
 
+    if (exec_update_statement)
+        throw std::runtime_error("--exec-update not yet implemented.");
+
     if (nix_queue_cmd.cmd_exit_code.has_value())
         exit(nix_queue_cmd.cmd_exit_code.value());
     raise(nix_queue_cmd.cmd_term_sig.value());

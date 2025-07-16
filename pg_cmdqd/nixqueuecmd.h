@@ -1,7 +1,6 @@
 #ifndef NIXQUEUECMD_H
 #define NIXQUEUECMD_H
 
-#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -10,7 +9,6 @@
 
 #include "pq-raii/libpq-raii.hpp"
 #include "logger.h"
-#include "cmdqueue.h"
 #include "queuecmdmetadata.h"
 
 class NixQueueCmd
@@ -37,7 +35,7 @@ public:
     std::string cmd_stderr = "";
 
     NixQueueCmd(
-            std::shared_ptr<PG::result> &result,
+            const PG::result &result,
             int row,
             const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     NixQueueCmd(

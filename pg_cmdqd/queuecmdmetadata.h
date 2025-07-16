@@ -29,7 +29,7 @@ public:
 
     QueueCmdMetadata() = delete;
     QueueCmdMetadata(
-            std::shared_ptr<PG::result> &result,
+            const PG::result &result,
             int row_number,
             const std::unordered_map<std::string, int> &fieldMapping
         ) noexcept;

@@ -19,7 +19,7 @@ class SqlQueueCmd
     void receive_notice(const PGresult *res);
 
     std::optional<std::map<char, std::optional<std::string>>> handle_sql_fatality(
-            std::shared_ptr<PG::result> &result);
+            const PG::result &result);
 
 public:
     QueueCmdMetadata meta;
@@ -31,7 +31,7 @@ public:
     std::vector<std::map<char, std::optional<std::string>>> cmd_sql_nonfatal_errors;
 
     SqlQueueCmd() = delete;
-    SqlQueueCmd(std::shared_ptr<PG::result> &result,
+    SqlQueueCmd(const PG::result &result,
                 int row,
                 const std::unordered_map<std::string, int> &fieldMapping) noexcept;
     ~SqlQueueCmd() = default;
